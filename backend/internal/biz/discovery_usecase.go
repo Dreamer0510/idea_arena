@@ -424,6 +424,8 @@ type SelectedTopic struct {
 const (
 	semanticDedupDismissThreshold = 0.85
 	semanticDedupReviewThreshold  = 0.75
+	sourceFeedbackLookbackDays    = 30
+	sourceFeedbackMinSample       = 5
 )
 
 // fetchAndDedup 从所有渠道抓取话题并去重保存
@@ -475,6 +477,7 @@ func (uc *DiscoveryUsecase) fetchAndDedup(ctx context.Context) ([]*DiscoveredTop
 	}
 
 	// 去重：计算 content hash，过滤已存在的
+	sourceFactors := uc.buildSourceFeedbackFactors(ctx)
 	var newTopics []*DiscoveredTopic
 	for _, rt := range allRawTopics {
 		hash := contentHash(rt.Title, rt.Source)
@@ -486,6 +489,7 @@ func (uc *DiscoveryUsecase) fetchAndDedup(ctx context.Context) ([]*DiscoveredTop
 			continue
 		}
 		painScore, trendScore, feasibilityScore, monetizationScore, noveltyScore, totalScore := calculateRuleScores(rt)
+		totalScore = applySourceFeedbackFactor(totalScore, sourceFactors[rt.Source])
 		newTopics = append(newTopics, &DiscoveredTopic{
 			Title:             rt.Title,
 			Source:            rt.Source,
@@ -1010,6 +1014,38 @@ func noveltyPatternBoost(title string) float64 {
 		return 1.2
 	}
 	return 0
+}
+
+func (uc *DiscoveryUsecase) buildSourceFeedbackFactors(ctx context.Context) map[string]float64 {
+	result := make(map[string]float64)
+	stats, err := uc.repo.ListSourceFeedbackStats(ctx, sourceFeedbackLookbackDays)
+	if err != nil {
+		uc.log.Warnf("[Discovery] load source feedback stats failed: %v", err)
+		return result
+	}
+
+	for _, stat := range stats {
+		if stat == nil || stat.Source == "" || stat.SampleSize < sourceFeedbackMinSample {
+			continue
+		}
+		// 反哺因子范围：0.85 ~ 1.15
+		factor := 0.85 + stat.SuccessRate*0.30
+		if factor < 0.85 {
+			factor = 0.85
+		}
+		if factor > 1.15 {
+			factor = 1.15
+		}
+		result[stat.Source] = factor
+	}
+	return result
+}
+
+func applySourceFeedbackFactor(score float64, factor float64) float64 {
+	if factor <= 0 {
+		return clampScore(score)
+	}
+	return clampScore(score * factor)
 }
 
 func clampScore(score float64) float64 {

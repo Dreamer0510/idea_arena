@@ -279,6 +279,50 @@ func (r *discoveryRepo) ListTopicSourceStats(ctx context.Context, days int) ([]*
 	return result, nil
 }
 
+func (r *discoveryRepo) ListSourceFeedbackStats(ctx context.Context, days int) ([]*biz.SourceFeedbackStat, error) {
+	type feedbackRow struct {
+		Source       string `gorm:"column:source"`
+		SampleSize   int64  `gorm:"column:sample_size"`
+		SuccessCount int64  `gorm:"column:success_count"`
+	}
+
+	query := r.data.db.WithContext(ctx).Table("discovered_topics AS dt").
+		Joins("LEFT JOIN ideas AS i ON i.id = dt.idea_id AND i.deleted_at IS NULL").
+		Where("dt.idea_id > 0")
+
+	if days > 0 {
+		since := time.Now().AddDate(0, 0, -days)
+		query = query.Where("dt.discovered_at >= ?", since)
+	}
+
+	var rows []feedbackRow
+	if err := query.
+		Select(`
+			dt.source AS source,
+			COUNT(*) AS sample_size,
+			SUM(CASE WHEN i.status IN ('promising', 'graduated') THEN 1 ELSE 0 END) AS success_count
+		`).
+		Group("dt.source").
+		Order("sample_size DESC").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*biz.SourceFeedbackStat, 0, len(rows))
+	for _, row := range rows {
+		if row.Source == "" || row.SampleSize <= 0 {
+			continue
+		}
+		successRate := float64(row.SuccessCount) / float64(row.SampleSize)
+		result = append(result, &biz.SourceFeedbackStat{
+			Source:      row.Source,
+			SampleSize:  row.SampleSize,
+			SuccessRate: successRate,
+		})
+	}
+	return result, nil
+}
+
 func (r *discoveryRepo) GetTopic(ctx context.Context, id int64) (*biz.DiscoveredTopic, error) {
 	var m DiscoveredTopicModel
 	if err := r.data.db.WithContext(ctx).First(&m, id).Error; err != nil {

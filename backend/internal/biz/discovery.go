@@ -107,6 +107,13 @@ type TopicSourceStat struct {
 	SubmitRate       float64 `json:"submit_rate"` // 提交率 submitted/total
 }
 
+// SourceFeedbackStat 来源反哺统计（用于评分权重微调）
+type SourceFeedbackStat struct {
+	Source      string  `json:"source"`
+	SampleSize  int64   `json:"sample_size"`  // 已进入辩论样本数
+	SuccessRate float64 `json:"success_rate"` // promising+graduated 占比
+}
+
 // ---- Crawler Plugin 接口（定义在 biz 层，crawler 包实现）----
 
 // CrawlerPluginInterface 爬虫插件接口
@@ -151,6 +158,7 @@ type DiscoveryRepo interface {
 	SaveTopics(ctx context.Context, topics []*DiscoveredTopic) error
 	ListTopics(ctx context.Context, status string, page, pageSize int) ([]*DiscoveredTopic, int, error)
 	ListTopicSourceStats(ctx context.Context, days int) ([]*TopicSourceStat, error)
+	ListSourceFeedbackStats(ctx context.Context, days int) ([]*SourceFeedbackStat, error)
 	GetTopic(ctx context.Context, id int64) (*DiscoveredTopic, error)
 	UpdateTopicStatus(ctx context.Context, id int64, status string) error
 	UpdateTopicAnalysis(ctx context.Context, id int64, recommendation string, score float64) error
