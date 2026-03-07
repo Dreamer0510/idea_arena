@@ -7,20 +7,25 @@ import (
 
 // DiscoveredTopic 发现的话题业务实体
 type DiscoveredTopic struct {
-	ID             int64     `json:"id"`
-	Title          string    `json:"title"`
-	Source         string    `json:"source"`
-	SourceURL      string    `json:"source_url"`
-	Popularity     int       `json:"popularity"`
-	Replies        int       `json:"replies"`
-	Snippet        string    `json:"snippet"`
-	ContentHash    string    `json:"content_hash,omitempty"`
-	Status         string    `json:"status"`
-	Recommendation string    `json:"recommendation"`
-	RecommendScore float64   `json:"recommend_score"`
-	IdeaID         int64     `json:"idea_id"`
-	DiscoveredAt   time.Time `json:"discovered_at"`
-	BatchID        string    `json:"batch_id"`
+	ID                int64     `json:"id"`
+	Title             string    `json:"title"`
+	Source            string    `json:"source"`
+	SourceURL         string    `json:"source_url"`
+	Popularity        int       `json:"popularity"`
+	Replies           int       `json:"replies"`
+	Snippet           string    `json:"snippet"`
+	ContentHash       string    `json:"content_hash,omitempty"`
+	Status            string    `json:"status"`
+	Recommendation    string    `json:"recommendation"`
+	PainScore         float64   `json:"pain_score"`
+	TrendScore        float64   `json:"trend_score"`
+	FeasibilityScore  float64   `json:"feasibility_score"`
+	MonetizationScore float64   `json:"monetization_score"`
+	NoveltyScore      float64   `json:"novelty_score"`
+	RecommendScore    float64   `json:"recommend_score"`
+	IdeaID            int64     `json:"idea_id"`
+	DiscoveredAt      time.Time `json:"discovered_at"`
+	BatchID           string    `json:"batch_id"`
 }
 
 // CrawlerPlugin 爬虫插件配置
@@ -44,10 +49,10 @@ type SystemSettings struct {
 	DebateMaxRounds       int     `json:"debate_max_rounds"`
 	DebateGraduationScore float64 `json:"debate_graduation_score"`
 	DebateTimeout         string  `json:"debate_timeout"`
-	DiscoveryInterval     string  `json:"discovery_interval"`     // 话题发现间隔，如 "3h"
-	DiscoveryEnabled      bool    `json:"discovery_enabled"`      // 是否启用自动发现
-	TopicsPerSource       int     `json:"topics_per_source"`      // 每个渠道获取的话题数
-	AutoSubmitDebate      bool    `json:"auto_submit_debate"`     // 是否自动提交辩论
+	DiscoveryInterval     string  `json:"discovery_interval"` // 话题发现间隔，如 "3h"
+	DiscoveryEnabled      bool    `json:"discovery_enabled"`  // 是否启用自动发现
+	TopicsPerSource       int     `json:"topics_per_source"`  // 每个渠道获取的话题数
+	AutoSubmitDebate      bool    `json:"auto_submit_debate"` // 是否自动提交辩论
 }
 
 // DefaultSettings 默认设置
@@ -77,10 +82,10 @@ type DiscoveryTag struct {
 type RawTopic struct {
 	Title      string `json:"title"`
 	URL        string `json:"url"`
-	Source     string `json:"source"`      // 渠道标识
-	Popularity int    `json:"popularity"`  // 热度指标（浏览数/搜索热度等）
-	Replies    int    `json:"replies"`     // 讨论度（回复数/评论数等）
-	Snippet    string `json:"snippet"`     // 摘要/描述
+	Source     string `json:"source"`     // 渠道标识
+	Popularity int    `json:"popularity"` // 热度指标（浏览数/搜索热度等）
+	Replies    int    `json:"replies"`    // 讨论度（回复数/评论数等）
+	Snippet    string `json:"snippet"`    // 摘要/描述
 }
 
 // TopicAnalysis AI 分析结果

@@ -112,8 +112,10 @@ func main() {
 			var roundScores []float64
 			if idea.DebateLog != "" {
 				var dl struct {
-					Rounds  []struct{ Overall float64 `json:"overall"` } `json:"rounds"`
-					Summary string                                      `json:"summary"`
+					Rounds []struct {
+						Overall float64 `json:"overall"`
+					} `json:"rounds"`
+					Summary string `json:"summary"`
 				}
 				if err := json.Unmarshal([]byte(idea.DebateLog), &dl); err == nil {
 					summary = dl.Summary
@@ -167,10 +169,13 @@ func main() {
 	discoveryRepo := data.NewDiscoveryRepo(dataLayer, logger)
 	discoveryUc := biz.NewDiscoveryUsecase(discoveryRepo, ideaRepo, llmClient, logger)
 
-	// 注册爬虫插件（4个渠道：吾爱破解 + 关键词搜索 + 搜索热点趋势 + LLM创意生成）
+	// 注册爬虫插件（7个渠道：吾爱破解 + 关键词搜索 + 搜索热点趋势 + 社交痛点 + 学术前沿 + 融资信号 + LLM创意生成）
 	discoveryUc.RegisterPlugin(crawler.NewPojie52Plugin(logger))
 	discoveryUc.RegisterPlugin(crawler.NewKeywordSearchPlugin(logger, discoveryUc.GetEnabledKeywords))
 	discoveryUc.RegisterPlugin(crawler.NewTrendSearchPlugin(logger, discoveryUc.GetEnabledConstraintTags, discoveryUc.GetEnabledTrendQueries))
+	discoveryUc.RegisterPlugin(crawler.NewSocialPainPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewAcademicFrontierPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewFundingSignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
 	discoveryUc.RegisterPlugin(crawler.NewLLMCreativePlugin(llmClient, logger, discoveryUc.GetEnabledConstraintTags))
 
 	// 注入辩论引擎（用于全自动发现→辩论流程）

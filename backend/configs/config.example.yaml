@@ -58,10 +58,23 @@ search:
     api_key: ""
 
 discovery:
+  # 自动发现调度配置
   interval: 3h
   enabled: false
   topics_per_source: 10
   auto_submit_debate: false
+  # 插件开关在后台配置，不在此文件：
+  # /admin/discovery 或 /api/v1/admin/plugins/{name}/toggle
+  # 当前内置插件：
+  # - 52pojie
+  # - keyword_search
+  # - trend_search
+  # - social_pain
+  # - academic_frontier
+  # - funding_signal
+  # - llm_creative
+  # 语义去重阈值（当前写死在后端逻辑）：
+  # >0.85 自动过滤，0.75~0.85 人工复核，<0.75 进入自动精选
 
 notify:
   feishu:

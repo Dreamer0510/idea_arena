@@ -315,12 +315,20 @@ func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int,
 	}
 	uc.log.Infof("[AutoDiscovery] Step2: 已有 %d 个项目用于语义去重", len(existingSummaries))
 
-	// Step 3: AI 统一决策 — 从所有话题中精选最佳 1-3 个（严格去重）
-	selected, err := uc.aiSelectTopics(ctx, newTopics, existingSummaries)
+	// Step 3: 语义去重阈值门禁（>0.85 自动过滤，0.75~0.85 人工复核）
+	filteredTopics, reviewCount, dismissedCount := uc.applySemanticDedupThreshold(ctx, newTopics, existingSummaries)
+	uc.log.Infof("[AutoDiscovery] Step3: 语义阈值过滤后保留 %d，人工复核 %d，自动过滤 %d", len(filteredTopics), reviewCount, dismissedCount)
+	if len(filteredTopics) == 0 {
+		uc.log.Info("[AutoDiscovery] No topics left after semantic threshold filter")
+		return 0, nil
+	}
+
+	// Step 4: AI 统一决策 — 从可自动进入流程的话题中精选最佳 1-3 个（严格去重）
+	selected, err := uc.aiSelectTopics(ctx, filteredTopics, existingSummaries)
 	if err != nil {
 		uc.log.Warnf("[AutoDiscovery] AI selection failed: %v, using top topics by score", err)
 		// 降级：直接取前3个
-		selected = uc.fallbackSelect(newTopics, 3)
+		selected = uc.fallbackSelect(filteredTopics, 3)
 	}
 
 	if len(selected) == 0 {
@@ -328,9 +336,9 @@ func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int,
 		return 0, nil
 	}
 
-	uc.log.Infof("[AutoDiscovery] Step2: AI精选了 %d 个话题进行辩论", len(selected))
+	uc.log.Infof("[AutoDiscovery] Step4: AI精选了 %d 个话题进行辩论", len(selected))
 
-	// Step 4: 为每个精选话题创建 Idea 并启动辩论
+	// Step 5: 为每个精选话题创建 Idea 并启动辩论
 	debateCount := 0
 	for _, sel := range selected {
 		// 创建 Idea
@@ -385,10 +393,15 @@ type existingIdeaSummary struct {
 
 // SelectedTopic AI决策精选的话题
 type SelectedTopic struct {
-	Topic              string `json:"topic"`
-	Reason             string `json:"reason"`
-	DiscoveredTopicID  int64  `json:"discovered_topic_id,omitempty"`
+	Topic             string `json:"topic"`
+	Reason            string `json:"reason"`
+	DiscoveredTopicID int64  `json:"discovered_topic_id,omitempty"`
 }
+
+const (
+	semanticDedupDismissThreshold = 0.85
+	semanticDedupReviewThreshold  = 0.75
+)
 
 // fetchAndDedup 从所有渠道抓取话题并去重保存
 func (uc *DiscoveryUsecase) fetchAndDedup(ctx context.Context) ([]*DiscoveredTopic, error) {
@@ -449,16 +462,23 @@ func (uc *DiscoveryUsecase) fetchAndDedup(ctx context.Context) ([]*DiscoveredTop
 		if exists {
 			continue
 		}
+		painScore, trendScore, feasibilityScore, monetizationScore, noveltyScore, totalScore := calculateRuleScores(rt)
 		newTopics = append(newTopics, &DiscoveredTopic{
-			Title:       rt.Title,
-			Source:      rt.Source,
-			SourceURL:   rt.URL,
-			Popularity:  rt.Popularity,
-			Replies:     rt.Replies,
-			Snippet:     rt.Snippet,
-			ContentHash: hash,
-			Status:      "pending",
-			BatchID:     batchID,
+			Title:             rt.Title,
+			Source:            rt.Source,
+			SourceURL:         rt.URL,
+			Popularity:        rt.Popularity,
+			Replies:           rt.Replies,
+			Snippet:           rt.Snippet,
+			ContentHash:       hash,
+			Status:            "pending",
+			PainScore:         painScore,
+			TrendScore:        trendScore,
+			FeasibilityScore:  feasibilityScore,
+			MonetizationScore: monetizationScore,
+			NoveltyScore:      noveltyScore,
+			RecommendScore:    totalScore,
+			BatchID:           batchID,
 		})
 	}
 
@@ -618,6 +638,65 @@ func (uc *DiscoveryUsecase) fallbackSelect(topics []*DiscoveredTopic, count int)
 		})
 	}
 	return selected
+}
+
+// applySemanticDedupThreshold 在自动提交流程前执行语义去重阈值门禁
+// 规则：
+// 1) 相似度 > 0.85：自动过滤（标记 dismissed）
+// 2) 相似度 0.75~0.85：进入人工复核队列（保留 pending，不进入自动辩论）
+// 3) 相似度 < 0.75：进入自动辩论精选候选
+func (uc *DiscoveryUsecase) applySemanticDedupThreshold(
+	ctx context.Context,
+	topics []*DiscoveredTopic,
+	existingIdeas []existingIdeaSummary,
+) (kept []*DiscoveredTopic, reviewCount int, dismissedCount int) {
+	if len(topics) == 0 || len(existingIdeas) == 0 {
+		return topics, 0, 0
+	}
+
+	existingTexts := make([]string, 0, len(existingIdeas))
+	for _, idea := range existingIdeas {
+		text := buildExistingIdeaSemanticText(idea)
+		if text != "" {
+			existingTexts = append(existingTexts, text)
+		}
+	}
+	if len(existingTexts) == 0 {
+		return topics, 0, 0
+	}
+
+	kept = make([]*DiscoveredTopic, 0, len(topics))
+	for _, topic := range topics {
+		candidateText := buildTopicSemanticText(topic)
+		if candidateText == "" {
+			kept = append(kept, topic)
+			continue
+		}
+
+		maxSimilarity := 0.0
+		for _, existingText := range existingTexts {
+			similarity := semanticSimilarity(candidateText, existingText)
+			if similarity > maxSimilarity {
+				maxSimilarity = similarity
+			}
+		}
+
+		switch {
+		case maxSimilarity > semanticDedupDismissThreshold:
+			dismissedCount++
+			if err := uc.repo.UpdateTopicStatus(ctx, topic.ID, "dismissed"); err != nil {
+				uc.log.Warnf("[AutoDiscovery] semantic dismiss failed for topic %d: %v", topic.ID, err)
+			}
+			uc.log.Infof("[AutoDiscovery] semantic dismiss topic=%d similarity=%.2f title=%s", topic.ID, maxSimilarity, truncateText(topic.Title, 80))
+		case maxSimilarity >= semanticDedupReviewThreshold:
+			reviewCount++
+			uc.log.Infof("[AutoDiscovery] semantic review topic=%d similarity=%.2f title=%s", topic.ID, maxSimilarity, truncateText(topic.Title, 80))
+		default:
+			kept = append(kept, topic)
+		}
+	}
+
+	return kept, reviewCount, dismissedCount
 }
 
 // analyzeTopics 用 AI 分析话题推荐度（用于手动发现流程）
@@ -834,4 +913,154 @@ func extractSuggestedTopic(recommendation, fallback string) string {
 		return strings.TrimSpace(matches[1])
 	}
 	return fallback
+}
+
+func calculateRuleScores(rt *RawTopic) (pain, trend, feasibility, monetization, novelty, total float64) {
+	text := strings.ToLower(rt.Title + " " + rt.Snippet)
+
+	painKeywords := []string{"痛点", "吐槽", "抱怨", "求助", "避雷", "效率低", "麻烦", "难", "贵", "问题", "痛苦", "frustrat", "pain", "struggle"}
+	monetizationKeywords := []string{"saas", "订阅", "收费", "变现", "客单价", "企业", "商家", "b2b", "降本", "增效", "roi", "pay", "pricing", "revenue"}
+	feasibleNegativeKeywords := []string{"量子", "脑机", "核聚变", "纳米机器人", "太空殖民", "永生", "意识上传"}
+
+	painHits := keywordHits(text, painKeywords)
+	monetizationHits := keywordHits(text, monetizationKeywords)
+	feasibleNegativeHits := keywordHits(text, feasibleNegativeKeywords)
+
+	pain = clampScore(4.0 + float64(painHits)*1.2 + normalizeMetric(rt.Replies, 100)*0.3)
+	trend = clampScore(normalizeMetric(rt.Popularity, 800)*0.7 + normalizeMetric(rt.Replies, 120)*0.3)
+	feasibility = clampScore(7.0 - float64(feasibleNegativeHits)*2.5 + normalizeMetric(rt.Replies, 80)*0.2)
+	monetization = clampScore(4.5 + float64(monetizationHits)*1.3 + normalizeMetric(rt.Popularity, 1000)*0.2)
+	novelty = clampScore(5.5 + sourceNoveltyBoost(rt.Source) + noveltyPatternBoost(rt.Title))
+
+	total = clampScore(
+		pain*0.30 +
+			trend*0.20 +
+			feasibility*0.20 +
+			monetization*0.20 +
+			novelty*0.10,
+	)
+	return pain, trend, feasibility, monetization, novelty, total
+}
+
+func keywordHits(text string, keywords []string) int {
+	hits := 0
+	for _, kw := range keywords {
+		if strings.Contains(text, strings.ToLower(kw)) {
+			hits++
+		}
+	}
+	return hits
+}
+
+func normalizeMetric(value, cap int) float64 {
+	if value <= 0 || cap <= 0 {
+		return 0
+	}
+	if value >= cap {
+		return 10
+	}
+	return float64(value) * 10 / float64(cap)
+}
+
+func sourceNoveltyBoost(source string) float64 {
+	switch source {
+	case "llm_creative", "collision":
+		return 2.0
+	case "bing_trend_en":
+		return 1.0
+	default:
+		return 0.4
+	}
+}
+
+func noveltyPatternBoost(title string) float64 {
+	if strings.Contains(title, "×") || strings.Contains(title, " x ") {
+		return 1.2
+	}
+	return 0
+}
+
+func clampScore(score float64) float64 {
+	if score < 0 {
+		return 0
+	}
+	if score > 10 {
+		return 10
+	}
+	return score
+}
+
+func buildExistingIdeaSemanticText(idea existingIdeaSummary) string {
+	return normalizeSemanticText(strings.Join([]string{
+		idea.ProductName,
+		idea.Topic,
+		idea.OneLiner,
+		strings.Join(idea.Tags, " "),
+	}, " "))
+}
+
+func buildTopicSemanticText(topic *DiscoveredTopic) string {
+	if topic == nil {
+		return ""
+	}
+	return normalizeSemanticText(strings.Join([]string{
+		topic.Title,
+		topic.Snippet,
+	}, " "))
+}
+
+func semanticSimilarity(left, right string) float64 {
+	leftSet := semanticTokenSet(left)
+	rightSet := semanticTokenSet(right)
+	if len(leftSet) == 0 || len(rightSet) == 0 {
+		return 0
+	}
+
+	intersection := 0
+	for token := range leftSet {
+		if _, exists := rightSet[token]; exists {
+			intersection++
+		}
+	}
+	union := len(leftSet) + len(rightSet) - intersection
+	if union <= 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func normalizeSemanticText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	invalidChars := regexp.MustCompile(`[^\p{Han}a-z0-9]+`)
+	text = invalidChars.ReplaceAllString(text, " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+}
+
+func semanticTokenSet(text string) map[string]struct{} {
+	set := make(map[string]struct{})
+	if text == "" {
+		return set
+	}
+
+	for _, token := range strings.Fields(text) {
+		if token != "" {
+			set["w:"+token] = struct{}{}
+		}
+	}
+
+	compact := strings.ReplaceAll(text, " ", "")
+	runes := []rune(compact)
+	if len(runes) == 1 {
+		set["g:"+string(runes[0])] = struct{}{}
+		return set
+	}
+
+	for index := 0; index < len(runes)-1; index++ {
+		bigram := string(runes[index : index+2])
+		set["g:"+bigram] = struct{}{}
+	}
+	return set
 }

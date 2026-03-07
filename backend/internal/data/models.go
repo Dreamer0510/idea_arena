@@ -27,20 +27,25 @@ func (SearchKeywordModel) TableName() string { return "search_keywords" }
 
 // DiscoveredTopicModel 发现的话题
 type DiscoveredTopicModel struct {
-	ID              int64     `gorm:"primaryKey;autoIncrement"`
-	Title           string    `gorm:"size:512;not null"`
-	Source          string    `gorm:"size:64;not null"`  // 来源渠道：52pojie, bing, baidu, v2ex ...
-	SourceURL       string    `gorm:"size:1024"`         // 原始链接
-	Popularity      int       `gorm:"default:0"`         // 热度（浏览/点赞等）
-	Replies         int       `gorm:"default:0"`         // 回复/讨论数
-	Snippet         string    `gorm:"type:text"`         // 摘要或描述
-	ContentHash     string    `gorm:"size:64;index"`     // 内容哈希，用于去重
-	Status          string    `gorm:"size:32;default:'pending'"` // pending, recommended, submitted, dismissed
-	Recommendation  string    `gorm:"type:text"`         // AI 推荐理由
-	RecommendScore  float64   `gorm:"default:0"`         // AI 推荐分数 (0-10)
-	IdeaID          int64     `gorm:"default:0"`         // 关联的 Idea ID（如果已提交辩论）
-	DiscoveredAt    time.Time `gorm:"autoCreateTime"`    // 发现时间
-	BatchID         string    `gorm:"size:64;index"`     // 批次 ID，同一轮发现的归为一批
+	ID                int64     `gorm:"primaryKey;autoIncrement"`
+	Title             string    `gorm:"size:512;not null"`
+	Source            string    `gorm:"size:64;not null"`          // 来源渠道：52pojie, bing, baidu, v2ex ...
+	SourceURL         string    `gorm:"size:1024"`                 // 原始链接
+	Popularity        int       `gorm:"default:0"`                 // 热度（浏览/点赞等）
+	Replies           int       `gorm:"default:0"`                 // 回复/讨论数
+	Snippet           string    `gorm:"type:text"`                 // 摘要或描述
+	ContentHash       string    `gorm:"size:64;index"`             // 内容哈希，用于去重
+	Status            string    `gorm:"size:32;default:'pending'"` // pending, recommended, submitted, dismissed
+	Recommendation    string    `gorm:"type:text"`                 // AI 推荐理由
+	PainScore         float64   `gorm:"default:0"`                 // 痛点强度分 (0-10)
+	TrendScore        float64   `gorm:"default:0"`                 // 趋势增速分 (0-10)
+	FeasibilityScore  float64   `gorm:"default:0"`                 // 落地可行分 (0-10)
+	MonetizationScore float64   `gorm:"default:0"`                 // 变现清晰分 (0-10)
+	NoveltyScore      float64   `gorm:"default:0"`                 // 新颖度分 (0-10)
+	RecommendScore    float64   `gorm:"default:0"`                 // AI 推荐分数 (0-10)
+	IdeaID            int64     `gorm:"default:0"`                 // 关联的 Idea ID（如果已提交辩论）
+	DiscoveredAt      time.Time `gorm:"autoCreateTime"`            // 发现时间
+	BatchID           string    `gorm:"size:64;index"`             // 批次 ID，同一轮发现的归为一批
 }
 
 func (DiscoveredTopicModel) TableName() string { return "discovered_topics" }
@@ -51,7 +56,7 @@ type CrawlerPluginModel struct {
 	Name      string    `gorm:"uniqueIndex;size:64;not null"` // 插件名：52pojie, bing_keyword, baidu_keyword, v2ex ...
 	Label     string    `gorm:"size:128"`                     // 显示名
 	Enabled   bool      `gorm:"default:false"`
-	Config    string    `gorm:"type:text"`                    // JSON 格式的插件配置
+	Config    string    `gorm:"type:text"` // JSON 格式的插件配置
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
 
