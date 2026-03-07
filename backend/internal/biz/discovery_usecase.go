@@ -785,11 +785,20 @@ func (uc *DiscoveryUsecase) analyzeTopics(ctx context.Context, topics []*Discove
 			continue
 		}
 		topic := topics[r.Index]
-		recommendation := r.Recommendation
+		ruleScore := clampScore(topic.RecommendScore)
+		llmScore := clampScore(r.RecommendScore)
+		hybridScore := clampScore(ruleScore*0.60 + llmScore*0.40)
+
+		recommendation := fmt.Sprintf(
+			"[混合评分] 规则 %.1f × 0.60 + LLM %.1f × 0.40 = %.1f\n[规则分项] 痛点 %.1f / 趋势 %.1f / 可行 %.1f / 变现 %.1f / 新颖 %.1f\n\n%s",
+			ruleScore, llmScore, hybridScore,
+			topic.PainScore, topic.TrendScore, topic.FeasibilityScore, topic.MonetizationScore, topic.NoveltyScore,
+			r.Recommendation,
+		)
 		if r.SuggestedTopic != "" {
 			recommendation = fmt.Sprintf("[建议话题] %s\n\n%s", r.SuggestedTopic, recommendation)
 		}
-		_ = uc.repo.UpdateTopicAnalysis(ctx, topic.ID, recommendation, r.RecommendScore)
+		_ = uc.repo.UpdateTopicAnalysis(ctx, topic.ID, recommendation, hybridScore)
 	}
 
 	uc.log.Infof("[Discovery] AI analysis completed for %d topics", len(results))
