@@ -3,7 +3,6 @@ package crawler
 import (
 	"context"
 	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -47,15 +46,17 @@ func NewTrendSearchPlugin(
 	getTrendQueries func() (cn []string, en []string),
 ) *TrendSearchPlugin {
 	return &TrendSearchPlugin{
-		client:          &http.Client{Timeout: 15 * time.Second},
+		client:          newCrawlerHTTPClient(15 * time.Second),
 		log:             log.NewHelper(logger),
 		getConstraints:  getConstraints,
 		getTrendQueries: getTrendQueries,
 	}
 }
 
-func (p *TrendSearchPlugin) Name() string  { return "trend_search" }
-func (p *TrendSearchPlugin) Label() string { return "搜索热点趋势抓取（Bing/百度实时热点）" }
+func (p *TrendSearchPlugin) Name() string { return "trend_search" }
+func (p *TrendSearchPlugin) Label() string {
+	return "搜索热点趋势抓取（Bing/百度实时热点）"
+}
 
 func (p *TrendSearchPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopic, error) {
 	// 从DB读取自定义搜索词，无则用默认
@@ -165,25 +166,21 @@ func (p *TrendSearchPlugin) searchBaidu(ctx context.Context, query string, limit
 }
 
 func (p *TrendSearchPlugin) doGet(ctx context.Context, rawURL, acceptLang string) string {
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-	if err != nil {
-		return ""
+	referer := "https://www.bing.com/"
+	if strings.Contains(rawURL, "baidu.com") {
+		referer = "https://www.baidu.com/"
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", acceptLang)
-
-	resp, err := p.client.Do(req)
+	body, err := fetchHTMLWithRetry(ctx, p.client, rawURL, crawlerFetchOptions{
+		AcceptLanguage: acceptLang,
+		Referer:        referer,
+		MaxRetries:     2,
+		DetectAntiBot:  true,
+	})
 	if err != nil {
 		p.log.Warnf("[TrendSearch] HTTP error: %v", err)
 		return ""
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ""
-	}
-	return string(body)
+	return body
 }
 
 func shuffleStrings(src []string) []string {

@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -29,7 +30,7 @@ type Pojie52Plugin struct {
 // NewPojie52Plugin 创建 52pojie 爬虫插件
 func NewPojie52Plugin(logger log.Logger) *Pojie52Plugin {
 	return &Pojie52Plugin{
-		client: &http.Client{Timeout: 20 * time.Second},
+		client: newCrawlerHTTPClient(20 * time.Second),
 		log:    log.NewHelper(logger),
 	}
 }
@@ -39,23 +40,18 @@ func (p *Pojie52Plugin) Label() string { return "吾爱破解 - 热门帖子" }
 
 func (p *Pojie52Plugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopic, error) {
 	url := "https://www.52pojie.cn/forum.php?mod=guide&view=hot"
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("52pojie request build error: %w", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-
-	resp, err := p.client.Do(req)
+	rawHTML, err := fetchHTMLWithRetry(ctx, p.client, url, crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9",
+		Referer:        "https://www.52pojie.cn/",
+		MaxRetries:     2,
+		DetectAntiBot:  true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("52pojie fetch error: %w", err)
 	}
-	defer resp.Body.Close()
 
 	// 52pojie 使用 GBK 编码，需要转为 UTF-8
-	utf8Reader := transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
+	utf8Reader := transform.NewReader(bytes.NewReader([]byte(rawHTML)), simplifiedchinese.GBK.NewDecoder())
 	body, err := io.ReadAll(utf8Reader)
 	if err != nil {
 		return nil, fmt.Errorf("52pojie read body error: %w", err)
@@ -66,14 +62,15 @@ func (p *Pojie52Plugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopic, 
 
 // parseHotThreads 解析 52pojie 热门帖子列表
 // 实际 HTML 结构（Discuz! 热门导读）：
-//   <tbody id="normalthread_2093204">
-//   <tr>
-//     <th class="common">
-//       <a href="thread-2093204-1-1.html" ... class="xst" >标题</a>
-//     </th>
-//     <td class="num"><a ...>回复数</a><em>浏览数</em></td>
-//   </tr>
-//   </tbody>
+//
+//	<tbody id="normalthread_2093204">
+//	<tr>
+//	  <th class="common">
+//	    <a href="thread-2093204-1-1.html" ... class="xst" >标题</a>
+//	  </th>
+//	  <td class="num"><a ...>回复数</a><em>浏览数</em></td>
+//	</tr>
+//	</tbody>
 func (p *Pojie52Plugin) parseHotThreads(html string, limit int) []*biz.RawTopic {
 	var topics []*biz.RawTopic
 

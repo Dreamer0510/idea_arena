@@ -24,6 +24,9 @@ type DiscoveryUsecase struct {
 	debateUc  *DebateUsecase
 	log       *log.Helper
 
+	providerManager *llm.ProviderManager
+	providerRepo    ProviderRepository
+
 	plugins   map[string]CrawlerPluginInterface
 	pluginsMu sync.RWMutex
 
@@ -53,6 +56,12 @@ func NewDiscoveryUsecase(
 // SetDebateUsecase 注入辩论引擎（避免循环依赖）
 func (uc *DiscoveryUsecase) SetDebateUsecase(debateUc *DebateUsecase) {
 	uc.debateUc = debateUc
+}
+
+// SetProviderManager 注入多服务商调用能力（用于插件 AI 扩展）
+func (uc *DiscoveryUsecase) SetProviderManager(pm *llm.ProviderManager, providerRepo ProviderRepository) {
+	uc.providerManager = pm
+	uc.providerRepo = providerRepo
 }
 
 // RegisterPlugin 注册爬虫插件
@@ -224,6 +233,230 @@ func (uc *DiscoveryUsecase) ListPlugins(ctx context.Context) ([]*CrawlerPlugin, 
 
 func (uc *DiscoveryUsecase) TogglePlugin(ctx context.Context, name string, enabled bool) error {
 	return uc.repo.TogglePlugin(ctx, name, enabled)
+}
+
+func (uc *DiscoveryUsecase) UpdatePluginConfig(ctx context.Context, name, config string) error {
+	plugin, err := uc.repo.GetPlugin(ctx, name)
+	if err != nil {
+		return err
+	}
+	plugin.Config = config
+	return uc.repo.UpsertPlugin(ctx, plugin)
+}
+
+func (uc *DiscoveryUsecase) GetPluginConfig(name string) string {
+	plugin, err := uc.repo.GetPlugin(context.Background(), name)
+	if err != nil || plugin == nil {
+		return "{}"
+	}
+	if strings.TrimSpace(plugin.Config) == "" {
+		return "{}"
+	}
+	return plugin.Config
+}
+
+func (uc *DiscoveryUsecase) ExpandKeywordByAI(
+	ctx context.Context,
+	keywords []string,
+	providerID int64,
+	model string,
+	extraPerKeyword int,
+) ([]string, error) {
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+	if uc.providerManager == nil {
+		return nil, fmt.Errorf("provider manager not initialized")
+	}
+	if extraPerKeyword <= 0 {
+		extraPerKeyword = 2
+	}
+	if extraPerKeyword > 5 {
+		extraPerKeyword = 5
+	}
+
+	if providerID <= 0 && uc.providerRepo != nil {
+		if defaultProvider, err := uc.providerRepo.GetDefault(ctx); err == nil && defaultProvider != nil {
+			providerID = defaultProvider.ID
+		}
+	}
+	if providerID <= 0 {
+		return nil, fmt.Errorf("no available provider")
+	}
+	if strings.TrimSpace(model) == "" {
+		model = "qwen-plus"
+	}
+
+	baseKeywordsJSON, _ := json.Marshal(keywords)
+	systemPrompt := `你是“搜索关键词扩展器”。
+你的任务是基于给定关键词，生成可用于搜索引擎抓取的“场景化长尾关键词”。
+请保证结果多样化、贴近真实行业场景，并带有一定随机领域覆盖。`
+
+	userPrompt := fmt.Sprintf(`请基于以下关键词进行扩展：
+%s
+
+要求：
+1) 每个原关键词扩展 %d 条，优先输出“关键词 + 行业/场景 + 实际应用”形式。
+2) 覆盖尽量不同的随机领域，例如：医疗、教育、制造、物流、法务、财税、零售、农业、政务、跨境、电商、人力资源等。
+3) 语言以中文为主，短语可直接用于搜索，不要写解释句。
+4) 去重、避免空泛词（如“未来趋势”“全面分析”）。
+5) 仅输出 JSON 数组，不要 markdown，不要额外说明。
+
+输出示例：
+["AI自动化办公 在外贸跟单中的实际应用","AI自动化办公 在口腔诊所预约管理中的实际应用"]`,
+		string(baseKeywordsJSON), extraPerKeyword,
+	)
+
+	expandCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	response, err := uc.providerManager.CallWithProvider(
+		expandCtx,
+		providerID,
+		model,
+		systemPrompt,
+		[]llm.Message{{Role: "user", Content: userPrompt}},
+		&llm.CallOptions{Temperature: 1.1, MaxTokens: 600},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	expanded := parseExpandedKeywordsFromAIResponse(response)
+	if len(expanded) == 0 {
+		// 轻量重试一次，降低温度并强化输出约束，减少偶发空结果
+		retryResponse, retryErr := uc.providerManager.CallWithProvider(
+			expandCtx,
+			providerID,
+			model,
+			systemPrompt,
+			[]llm.Message{{Role: "user", Content: userPrompt + "\n\n再次强调：仅返回 JSON 字符串数组，不要返回对象、markdown、解释。"}},
+			&llm.CallOptions{Temperature: 0.7, MaxTokens: 600},
+		)
+		if retryErr == nil {
+			expanded = parseExpandedKeywordsFromAIResponse(retryResponse)
+		}
+	}
+
+	seen := make(map[string]struct{})
+	baseSet := make(map[string]struct{})
+	for _, kw := range keywords {
+		baseSet[strings.ToLower(strings.TrimSpace(kw))] = struct{}{}
+	}
+	result := make([]string, 0, len(expanded))
+	for _, kw := range expanded {
+		candidate := strings.TrimSpace(strings.Trim(kw, `"`))
+		if candidate == "" {
+			continue
+		}
+		key := strings.ToLower(candidate)
+		if _, exists := baseSet[key]; exists {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result, nil
+}
+
+func parseExpandedKeywordsFromAIResponse(response string) []string {
+	cleaned := strings.TrimSpace(response)
+	cleaned = strings.TrimPrefix(cleaned, "```json")
+	cleaned = strings.TrimPrefix(cleaned, "```JSON")
+	cleaned = strings.TrimPrefix(cleaned, "```")
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return nil
+	}
+
+	// 1) 直接是 JSON 数组
+	var expanded []string
+	if err := json.Unmarshal([]byte(cleaned), &expanded); err == nil && len(expanded) > 0 {
+		return normalizeExpandedKeywords(expanded)
+	}
+
+	// 2) 兼容 JSON 对象结构
+	var objectPayload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &objectPayload); err == nil && len(objectPayload) > 0 {
+		for _, key := range []string{"keywords", "items", "data", "result"} {
+			raw, ok := objectPayload[key]
+			if !ok {
+				continue
+			}
+			var arr []string
+			if err := json.Unmarshal(raw, &arr); err == nil && len(arr) > 0 {
+				return normalizeExpandedKeywords(arr)
+			}
+		}
+	}
+
+	// 3) 尝试提取首个 JSON 数组片段
+	if start := strings.Index(cleaned, "["); start >= 0 {
+		if end := strings.LastIndex(cleaned, "]"); end > start {
+			var arr []string
+			if err := json.Unmarshal([]byte(cleaned[start:end+1]), &arr); err == nil && len(arr) > 0 {
+				return normalizeExpandedKeywords(arr)
+			}
+		}
+	}
+
+	// 4) 兼容逐行列表/编号列表
+	lines := strings.Split(cleaned, "\n")
+	fromLines := make([]string, 0, len(lines))
+	bulletPrefix := regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)、])\s*`)
+	for _, line := range lines {
+		candidate := strings.TrimSpace(bulletPrefix.ReplaceAllString(line, ""))
+		candidate = strings.Trim(candidate, `"'`)
+		if candidate == "" {
+			continue
+		}
+		fromLines = append(fromLines, candidate)
+	}
+	return normalizeExpandedKeywords(fromLines)
+}
+
+func normalizeExpandedKeywords(keywords []string) []string {
+	seen := make(map[string]struct{}, len(keywords))
+	result := make([]string, 0, len(keywords))
+	for _, keyword := range keywords {
+		candidate := strings.TrimSpace(strings.Trim(keyword, `"'`))
+		if candidate == "" {
+			continue
+		}
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result
+}
+
+// TestPlugin 测试单个插件抓取能力（不入库）
+func (uc *DiscoveryUsecase) TestPlugin(ctx context.Context, name string, limit int) ([]*RawTopic, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	uc.pluginsMu.RLock()
+	plugin, ok := uc.plugins[name]
+	uc.pluginsMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("plugin not found: %s", name)
+	}
+
+	topics, err := plugin.Fetch(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	return topics, nil
 }
 
 // ---- Topics ----

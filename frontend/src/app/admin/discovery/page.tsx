@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search, Zap, Plus, Trash2, Power, ExternalLink,
-  ThumbsUp, ThumbsDown, Compass, Tag, Key, Plug,
+  ThumbsUp, ThumbsDown, Compass, Tag, Plug, FlaskConical, ChevronDown, ChevronUp,
 } from "lucide-react";
 import apiClient from "@/lib/api-client";
 import {
@@ -18,7 +18,6 @@ import type {
 const SUB_TABS = [
   { id: "topics", label: "话题列表", icon: Compass },
   { id: "tags", label: "约束标签", icon: Tag },
-  { id: "keywords", label: "搜索关键词", icon: Key },
   { id: "plugins", label: "渠道插件", icon: Plug },
 ] as const;
 
@@ -57,7 +56,6 @@ export default function DiscoveryPage() {
 
       {tab === "topics" && <TopicsPanel />}
       {tab === "tags" && <TagsPanel />}
-      {tab === "keywords" && <KeywordsPanel />}
       {tab === "plugins" && <PluginsPanel />}
     </div>
   );
@@ -394,117 +392,508 @@ function TagsPanel() {
 }
 
 // ============================================================
-// Keywords Panel
-// ============================================================
-function KeywordsPanel() {
-  const [keywords, setKeywords] = useState<SearchKeyword[]>([]);
-  const [newKw, setNewKw] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  const load = useCallback(() => {
-    apiClient.get("/api/v1/admin/keywords").then((r) => setKeywords(r.data.items || []));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const add = async () => {
-    if (!newKw.trim()) return;
-    setAdding(true);
-    try {
-      await apiClient.post("/api/v1/admin/keywords", { keyword: newKw.trim() });
-      setNewKw("");
-      load();
-    } finally { setAdding(false); }
-  };
-
-  const toggle = async (kw: SearchKeyword) => {
-    await apiClient.put(`/api/v1/admin/keywords/${kw.id}`, { keyword: kw.keyword, enabled: !kw.enabled });
-    load();
-  };
-
-  const remove = async (id: number) => {
-    await apiClient.delete(`/api/v1/admin/keywords/${id}`);
-    load();
-  };
-
-  return (
-    <Card title="搜索关键词管理" desc="预设关键词将被定时用于 Bing/百度搜索，发现新的创业话题灵感">
-      <div className="flex gap-2">
-        <input value={newKw} onChange={(e) => setNewKw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()}
-          placeholder="输入关键词，如：AI 自动化办公"
-          className="flex-1 rounded-lg border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        <PrimaryButton onClick={add} disabled={adding || !newKw.trim()} loading={adding}>
-          <Plus className="h-4 w-4" /> 添加
-        </PrimaryButton>
-      </div>
-      {keywords.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4 text-center">暂无关键词，添加一些吧 ↑</p>
-      ) : (
-        <div className="divide-y rounded-lg border mt-3">
-          {keywords.map((kw) => (
-            <div key={kw.id} className="flex items-center justify-between px-4 py-2.5">
-              <div className="flex items-center gap-3">
-                <button onClick={() => toggle(kw)}
-                  className={`w-9 h-5 rounded-full transition-colors relative ${kw.enabled ? "bg-primary" : "bg-muted"}`}>
-                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform shadow ${kw.enabled ? "left-[18px]" : "left-0.5"}`} />
-                </button>
-                <span className={`text-sm ${kw.enabled ? "text-foreground" : "text-muted-foreground line-through"}`}>{kw.keyword}</span>
-              </div>
-              <button onClick={() => remove(kw.id)} className="text-muted-foreground hover:text-destructive transition-colors">
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// ============================================================
 // Plugins Panel
 // ============================================================
+type PluginTestResult = {
+  count: number;
+  samples: Array<{
+    title: string;
+    url: string;
+    source: string;
+    snippet?: string;
+    popularity?: number;
+    replies?: number;
+  }>;
+};
+
+type ProviderOption = {
+  id: number;
+  name: string;
+  enabled: boolean;
+};
+
+type ProviderModel = {
+  model_id: string;
+  owned_by: string;
+};
+
+type KeywordPluginConfig = {
+  ai_expansion: {
+    enabled: boolean;
+    provider_id: number;
+    model: string;
+    extra_per_keyword: number;
+  };
+};
+
+const DEFAULT_KEYWORD_PLUGIN_CONFIG: KeywordPluginConfig = {
+  ai_expansion: {
+    enabled: false,
+    provider_id: 0,
+    model: "",
+    extra_per_keyword: 2,
+  },
+};
+
+function parseKeywordPluginConfig(raw?: string): KeywordPluginConfig {
+  if (!raw) return DEFAULT_KEYWORD_PLUGIN_CONFIG;
+  try {
+    const parsed = JSON.parse(raw);
+    const ai = parsed?.ai_expansion ?? {};
+    return {
+      ai_expansion: {
+        enabled: Boolean(ai.enabled),
+        provider_id: Number(ai.provider_id || 0),
+        model: typeof ai.model === "string" ? ai.model : "",
+        extra_per_keyword: Math.min(5, Math.max(1, Number(ai.extra_per_keyword || 2))),
+      },
+    };
+  } catch {
+    return DEFAULT_KEYWORD_PLUGIN_CONFIG;
+  }
+}
+
 function PluginsPanel() {
   const [plugins, setPlugins] = useState<CrawlerPlugin[]>([]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [testingPlugin, setTestingPlugin] = useState<string>("");
+  const [testResults, setTestResults] = useState<Record<string, PluginTestResult>>({});
+  const [providers, setProviders] = useState<ProviderOption[]>([]);
+  const [providerModels, setProviderModels] = useState<Record<number, ProviderModel[]>>({});
+  const [keywordPluginConfig, setKeywordPluginConfig] = useState<KeywordPluginConfig>(DEFAULT_KEYWORD_PLUGIN_CONFIG);
+  const [savingKeywordConfig, setSavingKeywordConfig] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
 
-  const load = useCallback(() => {
+  const [keywords, setKeywords] = useState<SearchKeyword[]>([]);
+  const [newKw, setNewKw] = useState("");
+  const [addingKw, setAddingKw] = useState(false);
+  const [keywordsLoading, setKeywordsLoading] = useState(false);
+
+  const loadPlugins = useCallback(() => {
     apiClient.get("/api/v1/admin/plugins").then((r) => setPlugins(r.data.items || []));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const loadKeywords = useCallback(() => {
+    setKeywordsLoading(true);
+    apiClient.get("/api/v1/admin/keywords")
+      .then((r) => setKeywords(r.data.items || []))
+      .finally(() => setKeywordsLoading(false));
+  }, []);
+
+  useEffect(() => { loadPlugins(); }, [loadPlugins]);
+  useEffect(() => { loadKeywords(); }, [loadKeywords]);
+
+  useEffect(() => {
+    apiClient.get("/api/v1/admin/providers")
+      .then((r) => setProviders((r.data.items || []).filter((p: ProviderOption) => p.enabled)))
+      .catch(() => setProviders([]));
+  }, []);
+
+  const loadModelsForProvider = useCallback(async (providerID: number) => {
+    if (!providerID || providerModels[providerID]) return;
+    try {
+      const res = await apiClient.get(`/api/v1/admin/providers/${providerID}/models`);
+      setProviderModels((prev) => ({ ...prev, [providerID]: res.data.items || [] }));
+    } catch {
+      setProviderModels((prev) => ({ ...prev, [providerID]: [] }));
+    }
+  }, [providerModels]);
+
+  useEffect(() => {
+    const keywordPlugin = plugins.find((p) => p.name === "keyword_search");
+    if (!keywordPlugin) return;
+    const parsed = parseKeywordPluginConfig(keywordPlugin.config);
+    setKeywordPluginConfig(parsed);
+    setModelQuery(parsed.ai_expansion.model || "");
+    if (parsed.ai_expansion.provider_id > 0) {
+      loadModelsForProvider(parsed.ai_expansion.provider_id);
+    }
+  }, [plugins, loadModelsForProvider]);
 
   const toggle = async (p: CrawlerPlugin) => {
     await apiClient.put(`/api/v1/admin/plugins/${p.name}/toggle`, { enabled: !p.enabled });
-    load();
+    loadPlugins();
+  };
+
+  const runTest = async (p: CrawlerPlugin) => {
+    setTestingPlugin(p.name);
+    setTestResults((prev) => {
+      const next = { ...prev };
+      delete next[p.name];
+      return next;
+    });
+    try {
+      const r = await apiClient.post(`/api/v1/admin/plugins/${p.name}/test`, { limit: 5 });
+      setTestResults((prev) => ({
+        ...prev,
+        [p.name]: {
+          count: r.data.count || 0,
+          samples: r.data.samples || [],
+        },
+      }));
+    } catch (e: unknown) {
+      const backendError = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      if (backendError?.includes("AI模型扩展关键词失败")) {
+        alert("AI模型扩展关键词失败，请检查API稳定性");
+      } else {
+        alert(`插件测试失败：${backendError || (e instanceof Error ? e.message : "未知错误")}`);
+      }
+    } finally {
+      setTestingPlugin("");
+    }
+  };
+
+  const saveKeywordConfig = async (next: KeywordPluginConfig) => {
+    setKeywordPluginConfig(next);
+    setSavingKeywordConfig(true);
+    try {
+      await apiClient.put("/api/v1/admin/plugins/keyword_search/config", { config: next });
+      loadPlugins();
+    } catch (e: unknown) {
+      alert(`保存插件配置失败：${e instanceof Error ? e.message : "未知错误"}`);
+    } finally {
+      setSavingKeywordConfig(false);
+    }
+  };
+
+  const commitModelQuery = async (value?: string) => {
+    if (!keywordPluginConfig.ai_expansion.enabled) return;
+    if (keywordPluginConfig.ai_expansion.provider_id <= 0) return;
+    const nextModel = (value ?? modelQuery).trim();
+    if (nextModel === keywordPluginConfig.ai_expansion.model) return;
+    await saveKeywordConfig({
+      ...keywordPluginConfig,
+      ai_expansion: {
+        ...keywordPluginConfig.ai_expansion,
+        model: nextModel,
+      },
+    });
+  };
+
+  const addKeyword = async () => {
+    if (!newKw.trim()) return;
+    setAddingKw(true);
+    try {
+      await apiClient.post("/api/v1/admin/keywords", { keyword: newKw.trim() });
+      setNewKw("");
+      loadKeywords();
+    } finally {
+      setAddingKw(false);
+    }
+  };
+
+  const toggleKeyword = async (kw: SearchKeyword) => {
+    await apiClient.put(`/api/v1/admin/keywords/${kw.id}`, { keyword: kw.keyword, enabled: !kw.enabled });
+    loadKeywords();
+  };
+
+  const removeKeyword = async (id: number) => {
+    await apiClient.delete(`/api/v1/admin/keywords/${id}`);
+    loadKeywords();
   };
 
   const sourceEmoji: Record<string, string> = {
-    "52pojie": "🔓", keyword_search: "🔍", trend_search: "🔥", llm_creative: "🧠",
+    "52pojie": "🔓", keyword_search: "🔍", trend_search: "🔥", social_pain: "🫂",
+    academic_frontier: "🧪", funding_signal: "💰", policy_signal: "🏛️",
+    demand_signal: "📈", llm_creative: "🧠",
   };
 
+  const currentProviderModels = providerModels[keywordPluginConfig.ai_expansion.provider_id] || [];
+  const normalizedModelQuery = modelQuery.trim().toLowerCase();
+  const filteredProviderModels = currentProviderModels.filter((model) =>
+    !normalizedModelQuery || model.model_id.toLowerCase().includes(normalizedModelQuery),
+  );
+
   return (
-    <Card title="渠道插件管理" desc="开启或关闭话题发现渠道，每个渠道独立抓取并汇总分析">
+    <Card title="渠道插件管理" desc="支持按插件展开编辑配置，并可直接执行连通性测试">
       {plugins.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4 text-center">没有已注册的插件</p>
       ) : (
         <div className="grid gap-3">
           {plugins.map((p) => (
             <div key={p.name}
-              className={`flex items-center justify-between rounded-xl border p-4 transition-colors ${p.enabled ? "border-primary/30 bg-primary/5" : ""}`}>
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">{sourceEmoji[p.name] || "📡"}</span>
-                <div>
-                  <div className="font-medium text-sm">{p.label || p.name}</div>
-                  <div className="text-xs text-muted-foreground">ID: {p.name}</div>
+              className={`rounded-xl border transition-colors ${p.enabled ? "border-primary/40 bg-primary/5" : "bg-card"}`}>
+              <div className="flex items-center justify-between gap-3 p-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{sourceEmoji[p.name] || "📡"}</span>
+                  <div>
+                    <div className="font-medium text-sm">{p.label || p.name}</div>
+                    <div className="text-xs text-muted-foreground">ID: {p.name}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => runTest(p)}
+                    disabled={testingPlugin === p.name}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium bg-muted text-muted-foreground hover:bg-accent disabled:opacity-60"
+                  >
+                    <FlaskConical className="h-3.5 w-3.5" />
+                    {testingPlugin === p.name ? "测试中" : "测试"}
+                  </button>
+                  <button onClick={() => toggle(p)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                      p.enabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-muted-foreground hover:bg-accent"
+                    }`}>
+                    <Power className="h-3.5 w-3.5" />
+                    {p.enabled ? "运行中" : "已关闭"}
+                  </button>
+                  <button
+                    onClick={() => setExpanded((prev) => ({ ...prev, [p.name]: !prev[p.name] }))}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    title="展开编辑配置"
+                  >
+                    {expanded[p.name] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
-              <button onClick={() => toggle(p)}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                  p.enabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-muted-foreground hover:bg-accent"
-                }`}>
-                <Power className="h-3.5 w-3.5" />
-                {p.enabled ? "运行中" : "已关闭"}
-              </button>
+
+              {testingPlugin === p.name && p.name === "keyword_search" && (
+                <div className="px-4 pb-3 -mt-1">
+                  <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                    正在进行多搜索引擎并发检索与相关性匹配（Bing + 百度，各关键词会抓取更多候选结果后再筛选）。该过程可能耗时较长，请稍候。
+                  </div>
+                </div>
+              )}
+
+              {testResults[p.name] && (
+                <div className="px-4 pb-3 -mt-1 space-y-2">
+                  <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                    测试结果：抓取到 <span className="font-semibold text-foreground">{testResults[p.name].count}</span> 条数据。
+                    <span className="ml-1">
+                      {p.name === "keyword_search"
+                        ? "以下为关键词插件并发抓取后，经过相关性匹配筛选得到的 Top 结果。"
+                        : "以下为插件原始抓取结果（未经过去重、评分和推荐筛选）。"}
+                    </span>
+                  </div>
+
+                  {testResults[p.name].samples.length > 0 && (
+                    <div className="overflow-x-auto rounded-lg border bg-background">
+                      <table className="w-full min-w-[860px] text-xs">
+                        <thead>
+                          <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                            <th className="px-3 py-2 font-medium w-12">#</th>
+                            <th className="px-3 py-2 font-medium">标题</th>
+                            <th className="px-3 py-2 font-medium w-28">来源</th>
+                            <th className="px-3 py-2 font-medium w-20">热度</th>
+                            <th className="px-3 py-2 font-medium w-20">讨论</th>
+                            <th className="px-3 py-2 font-medium">链接</th>
+                            <th className="px-3 py-2 font-medium">摘要</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {testResults[p.name].samples.map((item, idx) => (
+                            <tr key={`${p.name}-${idx}`} className="border-b last:border-0 align-top">
+                              <td className="px-3 py-2 text-muted-foreground">{idx + 1}</td>
+                              <td className="px-3 py-2 text-foreground leading-relaxed">{item.title || "-"}</td>
+                              <td className="px-3 py-2 text-muted-foreground">{item.source || "-"}</td>
+                              <td className="px-3 py-2 text-muted-foreground">{item.popularity ?? 0}</td>
+                              <td className="px-3 py-2 text-muted-foreground">{item.replies ?? 0}</td>
+                              <td className="px-3 py-2">
+                                {item.url ? (
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-primary hover:underline break-all"
+                                  >
+                                    {item.url}
+                                  </a>
+                                ) : "-"}
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground leading-relaxed">
+                                {item.snippet || "-"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {expanded[p.name] && (
+                <div className="border-t px-4 py-4 bg-background/50">
+                  {p.name === "keyword_search" ? (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border bg-card p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-sm font-semibold">AI 思路扩展</h4>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              开启后会调用你选择的服务商和模型，对关键词做随机行业场景扩展，降低重复结果。
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => saveKeywordConfig({
+                              ...keywordPluginConfig,
+                              ai_expansion: {
+                                ...keywordPluginConfig.ai_expansion,
+                                enabled: !keywordPluginConfig.ai_expansion.enabled,
+                              },
+                            })}
+                            disabled={savingKeywordConfig}
+                            className={`w-10 h-5 rounded-full transition-colors relative ${keywordPluginConfig.ai_expansion.enabled ? "bg-primary" : "bg-muted"}`}
+                            title="启用/关闭 AI 思路扩展"
+                          >
+                            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform shadow ${keywordPluginConfig.ai_expansion.enabled ? "left-[20px]" : "left-0.5"}`} />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          <select
+                            value={keywordPluginConfig.ai_expansion.provider_id}
+                            onChange={async (e) => {
+                              const providerID = Number(e.target.value);
+                              if (providerID > 0) await loadModelsForProvider(providerID);
+                              setModelQuery("");
+                              setModelDropdownOpen(false);
+                              saveKeywordConfig({
+                                ...keywordPluginConfig,
+                                ai_expansion: {
+                                  ...keywordPluginConfig.ai_expansion,
+                                  provider_id: providerID,
+                                  model: "",
+                                },
+                              });
+                            }}
+                            className="rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                            disabled={!keywordPluginConfig.ai_expansion.enabled || savingKeywordConfig}
+                          >
+                            <option value={0}>选择服务商</option>
+                            {providers.map((provider) => (
+                              <option key={provider.id} value={provider.id}>{provider.name}</option>
+                            ))}
+                          </select>
+
+                          <div className="relative">
+                            <input
+                              value={modelQuery}
+                              onChange={(e) => {
+                                setModelQuery(e.target.value);
+                                setModelDropdownOpen(true);
+                              }}
+                              onFocus={() => setModelDropdownOpen(true)}
+                              onBlur={() => {
+                                setTimeout(() => {
+                                  setModelDropdownOpen(false);
+                                  void commitModelQuery();
+                                }, 120);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  void commitModelQuery();
+                                  setModelDropdownOpen(false);
+                                }
+                              }}
+                              placeholder="搜索并选择模型"
+                              className="w-full rounded-lg border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                              disabled={!keywordPluginConfig.ai_expansion.enabled || savingKeywordConfig || keywordPluginConfig.ai_expansion.provider_id <= 0}
+                            />
+                            {modelDropdownOpen && keywordPluginConfig.ai_expansion.enabled && keywordPluginConfig.ai_expansion.provider_id > 0 && (
+                              <div className="absolute z-20 mt-1 w-full rounded-lg border bg-background shadow-lg">
+                                <div className="px-3 py-2 text-xs text-muted-foreground border-b">
+                                  共 {currentProviderModels.length} 个模型，显示 {filteredProviderModels.length} 个匹配项
+                                </div>
+                                <div className="max-h-52 overflow-y-auto">
+                                  {filteredProviderModels.length === 0 ? (
+                                    <div className="px-3 py-2 text-xs text-muted-foreground">没有匹配模型，可直接回车使用输入值</div>
+                                  ) : (
+                                    filteredProviderModels.map((model) => (
+                                      <button
+                                        key={model.model_id}
+                                        type="button"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          setModelQuery(model.model_id);
+                                          setModelDropdownOpen(false);
+                                          void commitModelQuery(model.model_id);
+                                        }}
+                                        className={`w-full text-left px-3 py-2 text-xs hover:bg-accent ${
+                                          keywordPluginConfig.ai_expansion.model === model.model_id ? "bg-primary/10 text-primary" : ""
+                                        }`}
+                                        title={model.model_id}
+                                      >
+                                        {model.model_id}
+                                      </button>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <select
+                            value={keywordPluginConfig.ai_expansion.extra_per_keyword}
+                            onChange={(e) => saveKeywordConfig({
+                              ...keywordPluginConfig,
+                              ai_expansion: {
+                                ...keywordPluginConfig.ai_expansion,
+                                extra_per_keyword: Number(e.target.value),
+                              },
+                            })}
+                            className="rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                            disabled={!keywordPluginConfig.ai_expansion.enabled || savingKeywordConfig}
+                          >
+                            <option value={1}>每词扩展 1 条</option>
+                            <option value={2}>每词扩展 2 条</option>
+                            <option value={3}>每词扩展 3 条</option>
+                            <option value={4}>每词扩展 4 条</option>
+                            <option value={5}>每词扩展 5 条</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold">搜索关键词配置（仅作用于该插件）</h4>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          配置后将用于 `keyword_search` 的 Bing/百度抓取与测试。
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          value={newKw}
+                          onChange={(e) => setNewKw(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && addKeyword()}
+                          placeholder="输入关键词，如：AI 自动化办公"
+                          className="flex-1 rounded-lg border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        />
+                        <PrimaryButton onClick={addKeyword} disabled={addingKw || !newKw.trim()} loading={addingKw}>
+                          <Plus className="h-4 w-4" /> 添加
+                        </PrimaryButton>
+                      </div>
+                      {keywordsLoading ? (
+                        <Loading text="关键词加载中..." />
+                      ) : keywords.length === 0 ? (
+                        <p className="text-sm text-muted-foreground py-2 text-center">暂无关键词，请先添加</p>
+                      ) : (
+                        <div className="divide-y rounded-lg border">
+                          {keywords.map((kw) => (
+                            <div key={kw.id} className="flex items-center justify-between px-4 py-2.5">
+                              <div className="flex items-center gap-3">
+                                <button onClick={() => toggleKeyword(kw)}
+                                  className={`w-9 h-5 rounded-full transition-colors relative ${kw.enabled ? "bg-primary" : "bg-muted"}`}>
+                                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform shadow ${kw.enabled ? "left-[18px]" : "left-0.5"}`} />
+                                </button>
+                                <span className={`text-sm ${kw.enabled ? "text-foreground" : "text-muted-foreground line-through"}`}>{kw.keyword}</span>
+                              </div>
+                              <button onClick={() => removeKeyword(kw.id)} className="text-muted-foreground hover:text-destructive transition-colors">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      当前插件暂无可视化配置项，后续可在此区域继续扩展。
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

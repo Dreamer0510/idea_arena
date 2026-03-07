@@ -3,7 +3,6 @@ package crawler
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,7 +29,7 @@ type PolicySignalPlugin struct {
 
 func NewPolicySignalPlugin(logger log.Logger, getConstraints func() []string) *PolicySignalPlugin {
 	return &PolicySignalPlugin{
-		client:         &http.Client{Timeout: 15 * time.Second},
+		client:         newCrawlerHTTPClient(15 * time.Second),
 		log:            log.NewHelper(logger),
 		getConstraints: getConstraints,
 	}
@@ -112,26 +111,15 @@ func (p *PolicySignalPlugin) buildQueries() []policySignalQuery {
 
 func (p *PolicySignalPlugin) searchBing(ctx context.Context, query string, limit int) []*biz.RawTopic {
 	searchURL := fmt.Sprintf("https://www.bing.com/search?q=%s&count=%d", url.QueryEscape(query), limit)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		p.log.Warnf("[PolicySignal] request build error: %v", err)
-		return nil
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-
-	resp, err := p.client.Do(req)
+	body, err := fetchHTMLWithRetry(ctx, p.client, searchURL, crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
+		Referer:        "https://www.bing.com/",
+		MaxRetries:     2,
+		DetectAntiBot:  true,
+	})
 	if err != nil {
 		p.log.Warnf("[PolicySignal] search error for query '%s': %v", query, err)
 		return nil
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-
-	return parseBingToTopics(string(body), query, limit)
+	return parseBingToTopics(body, query, limit)
 }

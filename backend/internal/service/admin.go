@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"idea_arena/internal/biz"
 
@@ -42,6 +44,8 @@ func (s *AdminService) RegisterHTTPRoutes(r *kratoshttp.Router) {
 	// Plugins
 	r.GET("/api/v1/admin/plugins", s.ListPlugins)
 	r.PUT("/api/v1/admin/plugins/{name}/toggle", s.TogglePlugin)
+	r.PUT("/api/v1/admin/plugins/{name}/config", s.UpdatePluginConfig)
+	r.POST("/api/v1/admin/plugins/{name}/test", s.TestPlugin)
 
 	// Tags
 	r.GET("/api/v1/admin/tags", s.ListTags)
@@ -154,6 +158,71 @@ func (s *AdminService) TogglePlugin(ctx kratoshttp.Context) error {
 		return ctx.Result(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	return ctx.Result(http.StatusOK, map[string]bool{"success": true})
+}
+
+func (s *AdminService) UpdatePluginConfig(ctx kratoshttp.Context) error {
+	name := ctx.Vars().Get("name")
+	var req struct {
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := ctx.Bind(&req); err != nil || req.Config == nil {
+		return ctx.Result(http.StatusBadRequest, map[string]string{"error": "invalid config"})
+	}
+
+	configBytes, err := json.Marshal(req.Config)
+	if err != nil || !json.Valid(configBytes) {
+		return ctx.Result(http.StatusBadRequest, map[string]string{"error": "invalid config json"})
+	}
+
+	if err := s.discoveryUc.UpdatePluginConfig(ctx, name, string(configBytes)); err != nil {
+		return ctx.Result(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return ctx.Result(http.StatusOK, map[string]bool{"success": true})
+}
+
+func (s *AdminService) TestPlugin(ctx kratoshttp.Context) error {
+	name := ctx.Vars().Get("name")
+	var req struct {
+		Limit int `json:"limit"`
+	}
+	_ = ctx.Bind(&req)
+
+	testCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	topics, err := s.discoveryUc.TestPlugin(testCtx, name, req.Limit)
+	if err != nil {
+		return ctx.Result(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	type sampleTopic struct {
+		Title      string `json:"title"`
+		URL        string `json:"url"`
+		Source     string `json:"source"`
+		Snippet    string `json:"snippet"`
+		Popularity int    `json:"popularity"`
+		Replies    int    `json:"replies"`
+	}
+
+	samples := make([]sampleTopic, 0, len(topics))
+	for _, t := range topics {
+		samples = append(samples, sampleTopic{
+			Title:      t.Title,
+			URL:        t.URL,
+			Source:     t.Source,
+			Snippet:    t.Snippet,
+			Popularity: t.Popularity,
+			Replies:    t.Replies,
+		})
+	}
+
+	return ctx.Result(http.StatusOK, map[string]interface{}{
+		"success": true,
+		"plugin":  name,
+		"count":   len(topics),
+		"samples": samples,
+		"test_at": strconv.FormatInt(time.Now().Unix(), 10),
+	})
 }
 
 // ---- Tags ----

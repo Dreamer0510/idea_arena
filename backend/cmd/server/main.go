@@ -169,23 +169,6 @@ func main() {
 	discoveryRepo := data.NewDiscoveryRepo(dataLayer, logger)
 	discoveryUc := biz.NewDiscoveryUsecase(discoveryRepo, ideaRepo, llmClient, logger)
 
-	// 注册爬虫插件（9个渠道：吾爱破解 + 关键词搜索 + 搜索热点趋势 + 社交痛点 + 学术前沿 + 融资信号 + 政策信号 + 需求信号 + LLM创意生成）
-	discoveryUc.RegisterPlugin(crawler.NewPojie52Plugin(logger))
-	discoveryUc.RegisterPlugin(crawler.NewKeywordSearchPlugin(logger, discoveryUc.GetEnabledKeywords))
-	discoveryUc.RegisterPlugin(crawler.NewTrendSearchPlugin(logger, discoveryUc.GetEnabledConstraintTags, discoveryUc.GetEnabledTrendQueries))
-	discoveryUc.RegisterPlugin(crawler.NewSocialPainPlugin(logger, discoveryUc.GetEnabledConstraintTags))
-	discoveryUc.RegisterPlugin(crawler.NewAcademicFrontierPlugin(logger, discoveryUc.GetEnabledConstraintTags))
-	discoveryUc.RegisterPlugin(crawler.NewFundingSignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
-	discoveryUc.RegisterPlugin(crawler.NewPolicySignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
-	discoveryUc.RegisterPlugin(crawler.NewDemandSignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
-	discoveryUc.RegisterPlugin(crawler.NewLLMCreativePlugin(llmClient, logger, discoveryUc.GetEnabledConstraintTags))
-
-	// 注入辩论引擎（用于全自动发现→辩论流程）
-	discoveryUc.SetDebateUsecase(debateUc)
-
-	// 启动全自动话题发现+辩论调度器
-	discoveryUc.StartScheduler(context.Background())
-
 	// 初始化扩展仓储
 	postRepo := data.NewSocialPostRepo(dataLayer, logger)
 	agentRepo := data.NewAgentConfigRepo(dataLayer, logger)
@@ -223,6 +206,32 @@ func main() {
 
 	// 将 ProviderManager 注入 DebateUsecase（通过适配器）
 	debateUc.SetProviderManager(providerManager, &agentConfigRepoAdapter{repo: agentRepo}, &providerRepoAdapter{repo: providerRepo})
+	// 将 ProviderManager 注入 DiscoveryUsecase（用于关键词插件 AI 扩展）
+	discoveryUc.SetProviderManager(providerManager, &providerRepoAdapter{repo: providerRepo})
+
+	// 注册爬虫插件（9个渠道：吾爱破解 + 关键词搜索 + 搜索热点趋势 + 社交痛点 + 学术前沿 + 融资信号 + 政策信号 + 需求信号 + LLM创意生成）
+	discoveryUc.RegisterPlugin(crawler.NewPojie52Plugin(logger))
+
+	keywordPlugin := crawler.NewKeywordSearchPlugin(logger, discoveryUc.GetEnabledKeywords)
+	keywordPlugin.SetAIExpansionHooks(
+		func() string { return discoveryUc.GetPluginConfig("keyword_search") },
+		discoveryUc.ExpandKeywordByAI,
+	)
+	discoveryUc.RegisterPlugin(keywordPlugin)
+
+	discoveryUc.RegisterPlugin(crawler.NewTrendSearchPlugin(logger, discoveryUc.GetEnabledConstraintTags, discoveryUc.GetEnabledTrendQueries))
+	discoveryUc.RegisterPlugin(crawler.NewSocialPainPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewAcademicFrontierPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewFundingSignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewPolicySignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewDemandSignalPlugin(logger, discoveryUc.GetEnabledConstraintTags))
+	discoveryUc.RegisterPlugin(crawler.NewLLMCreativePlugin(llmClient, logger, discoveryUc.GetEnabledConstraintTags))
+
+	// 注入辩论引擎（用于全自动发现→辩论流程）
+	discoveryUc.SetDebateUsecase(debateUc)
+
+	// 启动全自动话题发现+辩论调度器
+	discoveryUc.StartScheduler(context.Background())
 
 	// 初始化服务
 	ideaSvc := service.NewIdeaService(ideaUc, logger)
