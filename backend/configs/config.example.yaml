@@ -72,6 +72,8 @@ discovery:
   # - social_pain
   # - academic_frontier
   # - funding_signal
+  # - policy_signal
+  # - demand_signal
   # - llm_creative
   # 语义去重阈值（当前写死在后端逻辑）：
   # >0.85 自动过滤，0.75~0.85 人工复核，<0.75 进入自动精选

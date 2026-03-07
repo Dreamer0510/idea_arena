@@ -182,7 +182,7 @@ make clean
 - 多渠道爬虫自动发现 AI 创业话题
 - AI 分析推荐有价值的话题
 - 一键提交话题进入辩论队列
-- 内置插件：`52pojie`、`keyword_search`、`trend_search`、`social_pain`、`academic_frontier`、`funding_signal`、`llm_creative`
+- 内置插件：`52pojie`、`keyword_search`、`trend_search`、`social_pain`、`academic_frontier`、`funding_signal`、`policy_signal`、`demand_signal`、`llm_creative`
 - 自动辩论前语义去重阈值：`>0.85` 自动过滤，`0.75~0.85` 人工复核，`<0.75` 自动流程继续
 - 混合评分：规则分（痛点/趋势/可行/变现/新颖）× 0.60 + LLM 评分 × 0.40
 - 评分解释包含：混合公式结果 + 五项规则分项，便于人工复核
