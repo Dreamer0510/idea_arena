@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package ideaarena.v1;
+
+option go_package = "idea_arena/api/ideaarena/v1;v1";
+
+import "errors/errors.proto";
+
+enum ErrorReason {
+  option (errors.default_code) = 500;
+
+  // 未知错误
+  UNKNOWN_ERROR = 0;
+
+  // 用户相关
+  USER_NOT_FOUND = 1 [(errors.code) = 404];
+  USER_ALREADY_EXISTS = 2 [(errors.code) = 409];
+  INVALID_CREDENTIALS = 3 [(errors.code) = 401];
+  UNAUTHORIZED = 4 [(errors.code) = 401];
+  FORBIDDEN = 5 [(errors.code) = 403];
+
+  // Idea 相关
+  IDEA_NOT_FOUND = 10 [(errors.code) = 404];
+  IDEA_ALREADY_DEBATING = 11 [(errors.code) = 409];
+
+  // 辩论相关
+  DEBATE_IN_PROGRESS = 20 [(errors.code) = 409];
+  DEBATE_MAX_CONCURRENT = 21 [(errors.code) = 429];
+
+  // 队列相关
+  TOPIC_DUPLICATE = 30 [(errors.code) = 409];
+
+  // 参数相关
+  INVALID_PARAMETER = 40 [(errors.code) = 400];
+}

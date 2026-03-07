@@ -1,0 +1,71 @@
+server:
+  http:
+    addr: 0.0.0.0:8000
+    timeout: 10s
+  grpc:
+    addr: 0.0.0.0:9000
+    timeout: 10s
+
+data:
+  database:
+    driver: sqlite
+    source: data/idea_arena.db
+  redis:
+    addr: localhost:6379
+    password: ""
+    db: 0
+
+auth:
+  jwt_secret: change-me-in-production
+  jwt_expire: 24h
+
+llm:
+  base_url: https://your-llm-provider.com/v1
+  api_key: your-api-key-here
+  default_model: qwen-plus
+  max_tokens: 4096
+  timeout_sec: 300
+  max_retries: 4
+  models:
+    proposer: your-proposer-model
+    opponent: your-opponent-model
+    judge: your-judge-model
+    utility: your-utility-model
+
+debate:
+  max_rounds: 20
+  max_concurrent: 2
+  timeout: 1800s
+  retry_count: 3
+  graduation_score: 7.5
+
+search:
+  bing:
+    enabled: true
+    api_key: ""
+  baidu:
+    enabled: true
+    api_key: ""
+  tavily:
+    enabled: false
+    api_key: ""
+  serper:
+    enabled: false
+    api_key: ""
+
+discovery:
+  interval: 3h
+  enabled: false
+  topics_per_source: 10
+  auto_submit_debate: false
+
+notify:
+  feishu:
+    enabled: false
+    webhook_url: ""
+
+registry:
+  project_id: idea-arena
+  project_name: "Idea Arena"
+  description: "AI 创业点子辩论引擎"
+  version: "1.0.0"

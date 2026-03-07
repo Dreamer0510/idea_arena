@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data/sqlite:/app/data
+      - ./data/logs/backend:/app/logs
+      - ./data/config.yaml:/app/configs/config.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - HOSTNAME=0.0.0.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

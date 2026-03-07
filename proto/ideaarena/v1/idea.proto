@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package ideaarena.v1;
+
+option go_package = "idea_arena/api/ideaarena/v1;v1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// Ideas 服务
+service IdeaService {
+  // 获取 Idea 列表（支持分页、筛选、排序）
+  rpc ListIdeas(ListIdeasRequest) returns (ListIdeasReply) {
+    option (google.api.http) = {
+      get: "/api/v1/ideas"
+    };
+  }
+
+  // 获取 Idea 详情
+  rpc GetIdea(GetIdeaRequest) returns (GetIdeaReply) {
+    option (google.api.http) = {
+      get: "/api/v1/ideas/{id}"
+    };
+  }
+
+  // 创建 Idea
+  rpc CreateIdea(CreateIdeaRequest) returns (CreateIdeaReply) {
+    option (google.api.http) = {
+      post: "/api/v1/ideas"
+      body: "*"
+    };
+  }
+
+  // 更新 Idea
+  rpc UpdateIdea(UpdateIdeaRequest) returns (UpdateIdeaReply) {
+    option (google.api.http) = {
+      put: "/api/v1/ideas/{id}"
+      body: "*"
+    };
+  }
+
+  // 删除 Idea
+  rpc DeleteIdea(DeleteIdeaRequest) returns (DeleteIdeaReply) {
+    option (google.api.http) = {
+      delete: "/api/v1/ideas/{id}"
+    };
+  }
+}
+
+// -------- 请求/响应消息 --------
+
+message ListIdeasRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string status = 3;       // 筛选状态: pending/debating/graduated/failed
+  string sort_by = 4;      // 排序字段: score_overall/created_at
+  string sort_order = 5;   // asc/desc
+}
+
+message ListIdeasReply {
+  repeated IdeaInfo items = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message GetIdeaRequest {
+  int64 id = 1;
+}
+
+message GetIdeaReply {
+  IdeaDetail idea = 1;
+}
+
+message CreateIdeaRequest {
+  string topic = 1;
+}
+
+message CreateIdeaReply {
+  int64 id = 1;
+  string topic = 2;
+  string status = 3;
+}
+
+message UpdateIdeaRequest {
+  int64 id = 1;
+  string topic = 2;
+  string status = 3;
+}
+
+message UpdateIdeaReply {
+  bool success = 1;
+}
+
+message DeleteIdeaRequest {
+  int64 id = 1;
+}
+
+message DeleteIdeaReply {
+  bool success = 1;
+}
+
+// -------- 数据消息 --------
+
+message IdeaInfo {
+  int64 id = 1;
+  string topic = 2;
+  string status = 3;
+  string product_name = 4;
+  string one_liner = 5;
+  float score_feasibility = 6;
+  float score_economics = 7;
+  float score_profit = 8;
+  float score_overall = 9;
+  int32 round_count = 10;
+  repeated string tags = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message IdeaDetail {
+  int64 id = 1;
+  string topic = 2;
+  string status = 3;
+  string product_name = 4;
+  string one_liner = 5;
+  string proposal = 6;
+  string debate_log = 7;         // JSON string
+  string final_report = 8;
+  float score_feasibility = 9;
+  float score_economics = 10;
+  float score_profit = 11;
+  float score_overall = 12;
+  int32 round_count = 13;
+  string tech_stack = 14;
+  string dev_prompt = 15;
+  repeated string tags = 16;
+  string search_data = 17;       // JSON string
+  string judge_refined = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+}

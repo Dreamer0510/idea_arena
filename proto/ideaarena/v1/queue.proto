@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package ideaarena.v1;
+
+option go_package = "idea_arena/api/ideaarena/v1;v1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// 手动队列服务
+service QueueService {
+  // 提交话题到队列
+  rpc SubmitTopic(SubmitTopicRequest) returns (SubmitTopicReply) {
+    option (google.api.http) = {
+      post: "/api/v1/queue/submit"
+      body: "*"
+    };
+  }
+
+  // 获取队列列表
+  rpc ListQueue(ListQueueRequest) returns (ListQueueReply) {
+    option (google.api.http) = {
+      get: "/api/v1/queue/list"
+    };
+  }
+}
+
+message SubmitTopicRequest {
+  string topic = 1;
+}
+
+message SubmitTopicReply {
+  int64 id = 1;
+  string message = 2;
+}
+
+message ListQueueRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string status = 3;
+}
+
+message ListQueueReply {
+  repeated QueueItem items = 1;
+  int32 total = 2;
+}
+
+message QueueItem {
+  int64 id = 1;
+  string topic = 2;
+  string status = 3;
+  int64 submitted_by = 4;
+  google.protobuf.Timestamp created_at = 5;
+}

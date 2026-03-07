@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package ideaarena.v1;
+
+option go_package = "idea_arena/api/ideaarena/v1;v1";
+
+import "google/api/annotations.proto";
+
+// 辩论服务
+service DebateService {
+  // 启动辩论
+  rpc StartDebate(StartDebateRequest) returns (StartDebateReply) {
+    option (google.api.http) = {
+      post: "/api/v1/debate/start/{idea_id}"
+      body: "*"
+    };
+  }
+
+  // 获取辩论状态（HTTP 端点，实际通过 SSE 推送）
+  rpc GetDebateStatus(GetDebateStatusRequest) returns (DebateStatusReply) {
+    option (google.api.http) = {
+      get: "/api/v1/debate/status/{idea_id}"
+    };
+  }
+}
+
+message StartDebateRequest {
+  int64 idea_id = 1;
+}
+
+message StartDebateReply {
+  bool started = 1;
+  string message = 2;
+}
+
+message GetDebateStatusRequest {
+  int64 idea_id = 1;
+}
+
+message DebateStatusReply {
+  int64 idea_id = 1;
+  string status = 2;          // pending/searching/debating/scoring/refining/completed/failed
+  int32 current_round = 3;
+  int32 max_rounds = 4;
+  string current_agent = 5;   // proposer/opponent/scorer/judge
+  string latest_message = 6;
+  float current_score = 7;
+}

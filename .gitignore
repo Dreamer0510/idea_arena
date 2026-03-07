@@ -1,0 +1,51 @@
+# ====== 敏感文件（含密码/密钥）======
+deploy.sh
+backend/configs/config.yaml
+
+# ====== 环境变量 ======
+.env
+.env.local
+.env.production
+.env*.local
+
+# ====== 数据库 ======
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+backend/data/
+
+# ====== 日志 ======
+*.log
+data/logs/
+
+# ====== 依赖 ======
+node_modules/
+vendor/
+
+# ====== 构建产物 ======
+backend/bin/
+backend/server
+frontend/.next/
+frontend/out/
+
+# ====== 参考图片 & 截图（大文件）======
+ref_*.png
+screenshots/
+
+# ====== IDE ======
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ====== OS ======
+.DS_Store
+Thumbs.db
+
+# ====== Docker ======
+docker-compose.override.yaml
+
+# ====== 部署临时文件 ======
+*.tar.gz
+*.bak

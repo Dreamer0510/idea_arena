@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package registry.v1;
+
+option go_package = "idea_arena/api/registry/v1;registryv1";
+
+import "google/api/annotations.proto";
+
+// 统一后台注册接口 — 所有子项目必须实现
+service ProjectRegistry {
+  rpc GetProjectInfo(GetProjectInfoRequest) returns (GetProjectInfoReply) {
+    option (google.api.http) = {
+      get: "/api/v1/registry/info"
+    };
+  }
+
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckReply) {
+    option (google.api.http) = {
+      get: "/healthz"
+    };
+  }
+
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesReply) {
+    option (google.api.http) = {
+      get: "/api/v1/registry/routes"
+    };
+  }
+
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsReply) {
+    option (google.api.http) = {
+      get: "/api/v1/registry/permissions"
+    };
+  }
+}
+
+message GetProjectInfoRequest {}
+
+message GetProjectInfoReply {
+  string project_id = 1;
+  string project_name = 2;
+  string description = 3;
+  string version = 4;
+  string api_base_url = 5;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckReply {
+  string status = 1;       // "healthy" / "unhealthy"
+  string version = 2;
+  int64 uptime_seconds = 3;
+}
+
+message ListRoutesRequest {}
+
+message ListRoutesReply {
+  repeated RouteInfo routes = 1;
+}
+
+message RouteInfo {
+  string method = 1;
+  string path = 2;
+  string description = 3;
+  bool auth_required = 4;
+}
+
+message ListPermissionsRequest {}
+
+message ListPermissionsReply {
+  repeated PermissionInfo permissions = 1;
+}
+
+message PermissionInfo {
+  string key = 1;
+  string name = 2;
+  string description = 3;
+}
