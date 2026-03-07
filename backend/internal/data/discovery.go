@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"time"
 
 	"idea_arena/internal/biz"
 
@@ -230,6 +231,52 @@ func (r *discoveryRepo) ListTopics(ctx context.Context, status string, page, pag
 		result[i] = toDiscoveredTopicBiz(&m)
 	}
 	return result, int(total), nil
+}
+
+func (r *discoveryRepo) ListTopicSourceStats(ctx context.Context, days int) ([]*biz.TopicSourceStat, error) {
+	type sourceStatRow struct {
+		Source           string `gorm:"column:source"`
+		TotalCount       int64  `gorm:"column:total_count"`
+		RecommendedCount int64  `gorm:"column:recommended_count"`
+		SubmittedCount   int64  `gorm:"column:submitted_count"`
+		DismissedCount   int64  `gorm:"column:dismissed_count"`
+		PendingCount     int64  `gorm:"column:pending_count"`
+	}
+
+	query := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{})
+	if days > 0 {
+		since := time.Now().AddDate(0, 0, -days)
+		query = query.Where("discovered_at >= ?", since)
+	}
+
+	var rows []sourceStatRow
+	if err := query.
+		Select(`
+			source,
+			COUNT(*) AS total_count,
+			SUM(CASE WHEN status = 'recommended' THEN 1 ELSE 0 END) AS recommended_count,
+			SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) AS submitted_count,
+			SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END) AS dismissed_count,
+			SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count
+		`).
+		Group("source").
+		Order("total_count DESC").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*biz.TopicSourceStat, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, &biz.TopicSourceStat{
+			Source:           row.Source,
+			TotalCount:       row.TotalCount,
+			RecommendedCount: row.RecommendedCount,
+			SubmittedCount:   row.SubmittedCount,
+			DismissedCount:   row.DismissedCount,
+			PendingCount:     row.PendingCount,
+		})
+	}
+	return result, nil
 }
 
 func (r *discoveryRepo) GetTopic(ctx context.Context, id int64) (*biz.DiscoveredTopic, error) {

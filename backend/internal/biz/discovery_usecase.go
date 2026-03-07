@@ -238,6 +238,29 @@ func (uc *DiscoveryUsecase) ListTopics(ctx context.Context, status string, page,
 	return uc.repo.ListTopics(ctx, status, page, pageSize)
 }
 
+// ListTopicSourceStats 来源命中率统计
+func (uc *DiscoveryUsecase) ListTopicSourceStats(ctx context.Context, days int) ([]*TopicSourceStat, error) {
+	if days <= 0 {
+		days = 30
+	}
+
+	stats, err := uc.repo.ListTopicSourceStats(ctx, days)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, stat := range stats {
+		if stat == nil || stat.TotalCount <= 0 {
+			continue
+		}
+		hitCount := stat.RecommendedCount + stat.SubmittedCount
+		stat.HitRate = float64(hitCount) / float64(stat.TotalCount)
+		stat.SubmitRate = float64(stat.SubmittedCount) / float64(stat.TotalCount)
+	}
+
+	return stats, nil
+}
+
 func (uc *DiscoveryUsecase) DismissTopic(ctx context.Context, id int64) error {
 	return uc.repo.UpdateTopicStatus(ctx, id, "dismissed")
 }

@@ -126,3 +126,14 @@ export interface DiscoveredTopic {
   discovered_at: string;
   batch_id: string;
 }
+
+export interface TopicSourceStat {
+  source: string;
+  total_count: number;
+  recommended_count: number;
+  submitted_count: number;
+  dismissed_count: number;
+  pending_count: number;
+  hit_rate: number;
+  submit_rate: number;
+}

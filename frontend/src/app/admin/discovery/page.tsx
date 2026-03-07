@@ -3,16 +3,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Search, Zap, Plus, Trash2, Power, Loader2, ExternalLink,
+  Search, Zap, Plus, Trash2, Power, ExternalLink,
   ThumbsUp, ThumbsDown, Compass, Tag, Key, Plug,
 } from "lucide-react";
 import apiClient from "@/lib/api-client";
 import {
   PageHeader, Card, StatusBadge, Loading, EmptyState,
-  PrimaryButton, SecondaryButton, Toggle,
+  PrimaryButton, SecondaryButton,
 } from "@/components/admin/shared";
 import type {
-  SystemSettings, SearchKeyword, CrawlerPlugin, DiscoveredTopic, DiscoveryTag,
+  SearchKeyword, CrawlerPlugin, DiscoveredTopic, DiscoveryTag, TopicSourceStat,
 } from "@/types/api";
 
 const SUB_TABS = [
@@ -68,8 +68,11 @@ export default function DiscoveryPage() {
 // ============================================================
 function TopicsPanel() {
   const [topics, setTopics] = useState<DiscoveredTopic[]>([]);
+  const [sourceStats, setSourceStats] = useState<TopicSourceStat[]>([]);
   const [total, setTotal] = useState(0);
   const [filter, setFilter] = useState("");
+  const [days, setDays] = useState(30);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const router = useRouter();
@@ -83,7 +86,15 @@ function TopicsPanel() {
     });
   }, [filter]);
 
+  const loadSourceStats = useCallback(() => {
+    setStatsLoading(true);
+    apiClient.get(`/api/v1/admin/topics/source-stats?days=${days}`)
+      .then((r) => setSourceStats(r.data.items || []))
+      .finally(() => setStatsLoading(false));
+  }, [days]);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSourceStats(); }, [loadSourceStats]);
 
   const runNow = async () => {
     setRunning(true);
@@ -129,11 +140,75 @@ function TopicsPanel() {
   const sourceLabels: Record<string, string> = {
     "52pojie": "吾爱破解", bing_keyword: "Bing", baidu_keyword: "百度",
     bing_trend: "Bing热点", bing_trend_en: "Bing(EN)", baidu_trend: "百度热点",
+    xiaohongshu_pain: "小红书痛点", zhihu_pain: "知乎痛点", reddit_pain: "Reddit痛点",
+    arxiv_frontier: "arXiv前沿", hf_papers_frontier: "HF Papers", paperswithcode_frontier: "PapersWithCode",
+    "36kr_funding": "36氪融资", techcrunch_funding: "TechCrunch融资", crunchbase_funding: "Crunchbase融资",
+    gov_policy: "Gov政策", ndrc_policy: "发改委政策", miit_policy: "工信部政策",
+    linkedin_demand: "LinkedIn需求", zhaopin_demand: "招聘需求", g2_review_demand: "G2评论需求",
     llm_creative: "AI创意", collision: "跨域碰撞",
   };
 
   return (
     <div className="space-y-4">
+      {/* Source hit-rate board */}
+      <Card
+        title="来源命中率看板"
+        desc="按来源统计话题命中质量（recommended + submitted 视为命中）"
+        actions={(
+          <div className="flex items-center gap-1">
+            {[7, 30, 90].map((d) => (
+              <button
+                key={d}
+                onClick={() => setDays(d)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                  days === d ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                近{d}天
+              </button>
+            ))}
+          </div>
+        )}
+      >
+        {statsLoading ? (
+          <Loading text="统计加载中..." />
+        ) : sourceStats.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-3 text-center">暂无统计数据</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground border-b">
+                  <th className="py-2 pr-3">来源</th>
+                  <th className="py-2 px-3">总量</th>
+                  <th className="py-2 px-3">命中</th>
+                  <th className="py-2 px-3">已提交</th>
+                  <th className="py-2 px-3">命中率</th>
+                  <th className="py-2 px-3">提交率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sourceStats.map((row) => {
+                  const hitCount = row.recommended_count + row.submitted_count;
+                  const hitRate = `${(row.hit_rate * 100).toFixed(1)}%`;
+                  const submitRate = `${(row.submit_rate * 100).toFixed(1)}%`;
+                  return (
+                    <tr key={row.source} className="border-b last:border-0">
+                      <td className="py-2 pr-3 text-xs font-medium">{sourceLabels[row.source] || row.source}</td>
+                      <td className="py-2 px-3 text-xs">{row.total_count}</td>
+                      <td className="py-2 px-3 text-xs">{hitCount}</td>
+                      <td className="py-2 px-3 text-xs">{row.submitted_count}</td>
+                      <td className="py-2 px-3 text-xs font-semibold">{hitRate}</td>
+                      <td className="py-2 px-3 text-xs">{submitRate}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {/* Controls */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">

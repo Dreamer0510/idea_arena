@@ -53,6 +53,7 @@ func (s *AdminService) RegisterHTTPRoutes(r *kratoshttp.Router) {
 	r.POST("/api/v1/admin/discovery/run", s.RunDiscovery)
 	r.POST("/api/v1/admin/discovery/auto", s.RunAutoDiscovery)
 	r.GET("/api/v1/admin/topics", s.ListTopics)
+	r.GET("/api/v1/admin/topics/source-stats", s.ListTopicSourceStats)
 	r.POST("/api/v1/admin/topics/{id}/submit", s.SubmitTopic)
 	r.POST("/api/v1/admin/topics/{id}/dismiss", s.DismissTopic)
 }
@@ -254,6 +255,22 @@ func (s *AdminService) ListTopics(ctx kratoshttp.Context) error {
 		"items": topics,
 		"total": total,
 		"page":  page,
+	})
+}
+
+func (s *AdminService) ListTopicSourceStats(ctx kratoshttp.Context) error {
+	r := ctx.Request()
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 {
+		days = 30
+	}
+	stats, err := s.discoveryUc.ListTopicSourceStats(ctx, days)
+	if err != nil {
+		return ctx.Result(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return ctx.Result(http.StatusOK, map[string]interface{}{
+		"items": stats,
+		"days":  days,
 	})
 }
 

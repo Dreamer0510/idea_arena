@@ -95,6 +95,18 @@ type TopicAnalysis struct {
 	SuggestedTopic string  `json:"suggested_topic"` // 建议的辩论话题方向
 }
 
+// TopicSourceStat 来源命中率统计
+type TopicSourceStat struct {
+	Source           string  `json:"source"`
+	TotalCount       int64   `json:"total_count"`
+	RecommendedCount int64   `json:"recommended_count"`
+	SubmittedCount   int64   `json:"submitted_count"`
+	DismissedCount   int64   `json:"dismissed_count"`
+	PendingCount     int64   `json:"pending_count"`
+	HitRate          float64 `json:"hit_rate"`    // 推荐命中率（recommended+submitted）/total
+	SubmitRate       float64 `json:"submit_rate"` // 提交率 submitted/total
+}
+
 // ---- Crawler Plugin 接口（定义在 biz 层，crawler 包实现）----
 
 // CrawlerPluginInterface 爬虫插件接口
@@ -138,6 +150,7 @@ type DiscoveryRepo interface {
 	// Discovered Topics
 	SaveTopics(ctx context.Context, topics []*DiscoveredTopic) error
 	ListTopics(ctx context.Context, status string, page, pageSize int) ([]*DiscoveredTopic, int, error)
+	ListTopicSourceStats(ctx context.Context, days int) ([]*TopicSourceStat, error)
 	GetTopic(ctx context.Context, id int64) (*DiscoveredTopic, error)
 	UpdateTopicStatus(ctx context.Context, id int64, status string) error
 	UpdateTopicAnalysis(ctx context.Context, id int64, recommendation string, score float64) error

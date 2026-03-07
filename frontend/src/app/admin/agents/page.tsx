@@ -224,7 +224,7 @@ export default function AgentsPage() {
                       </div>
                     </div>
                     {agent.provider_id === 0 && (
-                      <p className="text-xs text-muted-foreground">使用全局默认时，将回退到"模型配置"页面中设定的角色模型</p>
+                      <p className="text-xs text-muted-foreground">使用全局默认时，将回退到“模型配置”页面中设定的角色模型</p>
                     )}
                   </div>
 
