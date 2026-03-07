@@ -11,21 +11,21 @@ type IdeaModel struct {
 	ID               int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	Topic            string         `gorm:"type:text;not null" json:"topic"`
 	Status           string         `gorm:"type:varchar(20);default:pending;index:idx_ideas_status" json:"status"`
-	Proposal         string         `gorm:"type:text" json:"proposal"`
-	DebateLog        string         `gorm:"type:text" json:"debate_log"`
-	FinalReport      string         `gorm:"type:text" json:"final_report"`
+	Proposal         string         `gorm:"type:longtext" json:"proposal"`
+	DebateLog        string         `gorm:"type:longtext" json:"debate_log"`
+	FinalReport      string         `gorm:"type:longtext" json:"final_report"`
 	ScoreFeasibility float64        `gorm:"type:real;default:0" json:"score_feasibility"`
 	ScoreEconomics   float64        `gorm:"type:real;default:0" json:"score_economics"`
 	ScoreProfit      float64        `gorm:"type:real;default:0" json:"score_profit"`
 	ScoreOverall     float64        `gorm:"type:real;default:0;index:idx_ideas_status_score" json:"score_overall"`
 	RoundCount       int            `gorm:"default:0" json:"round_count"`
-	TechStack        string         `gorm:"type:text" json:"tech_stack"`
-	DevPrompt        string         `gorm:"type:text" json:"dev_prompt"`
+	TechStack        string         `gorm:"type:longtext" json:"tech_stack"`
+	DevPrompt        string         `gorm:"type:longtext" json:"dev_prompt"`
 	Tags             string         `gorm:"type:text" json:"tags"`
 	ProductName      string         `gorm:"type:varchar(255)" json:"product_name"`
 	OneLiner         string         `gorm:"type:varchar(500)" json:"one_liner"`
-	SearchData       string         `gorm:"type:text" json:"search_data"`
-	JudgeRefined     string         `gorm:"type:text" json:"judge_refined"`
+	SearchData       string         `gorm:"type:longtext" json:"search_data"`
+	JudgeRefined     string         `gorm:"type:longtext" json:"judge_refined"`
 	CreatedAt        time.Time      `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt        time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`

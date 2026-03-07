@@ -135,7 +135,7 @@ Idea Arena 是一个 AI 驱动的创业点子辩论与评估系统。通过多 A
 | 后端框架 | Go Kratos | 微服务友好，预留统一后台 |
 | 前端框架 | Next.js 15 App Router | 与原项目一致，SSR 灵活 |
 | UI 组件库 | shadcn/ui + TailwindCSS | 高定制性，符合 frontend-design skill |
-| 数据库 | PostgreSQL | 生产级，支持 JSON 字段 |
+| 数据库 | SQLite（默认）/ MySQL（生产） | 本地零配置启动 + 线上可接入独立 MySQL |
 | 缓存 | Redis | 辩论状态缓存、限流 |
 | ORM | GORM | Go 生态最成熟 |
 | 认证 | JWT | 无状态，支持多项目 SSO |

@@ -17,8 +17,8 @@
 │                                         │                    │
 │                          ┌──────────────┼──────────────┐     │
 │                          ▼              ▼              ▼     │
-│                    PostgreSQL        Redis       LLM APIs    │
-│                    (数据持久化)    (缓存/限流)   (Anthropic等) │
+│                 SQLite / MySQL       Redis       LLM APIs    │
+│                   (数据持久化)     (缓存/限流)   (Anthropic等) │
 │                                                              │
 │                          ┌──────────────────────────┐        │
 │                          │   Debate Engine (协程)     │        │

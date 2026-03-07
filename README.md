@@ -6,7 +6,7 @@ AI 驱动的创业点子辩论与评估系统。通过多 Agent 辩论机制（�
 
 | 层 | 技术 |
 |---|---|
-| **后端** | Go 1.21, Kratos v2, GORM, SQLite, JWT |
+| **后端** | Go 1.21, Kratos v2, GORM, SQLite/MySQL, JWT |
 | **前端** | Next.js 15 (App Router), TailwindCSS, Zustand, Recharts, Lucide |
 | **部署** | Docker, docker-compose, Nginx, 一键部署脚本 |
 
@@ -326,6 +326,8 @@ bash deploy.sh
 | 数据 | 服务器路径 |
 |------|-----------|
 | SQLite 数据库 | `/opt/idea-arena/data/sqlite/idea_arena.db` |
+| MySQL 数据库（Docker） | `/opt/idea-arena/data/mysql/` |
+| MySQL 数据库（外部） | 通过 `data.database.source` DSN 接入 |
 | 后端配置 | `/opt/idea-arena/data/config.yaml` |
 | 后端日志 | `/opt/idea-arena/data/logs/backend/` |
 
@@ -339,6 +341,8 @@ docker compose logs -f backend   # 后端日志
 docker compose logs -f frontend  # 前端日志
 docker compose restart           # 重启服务
 docker compose down && docker compose up -d --build  # 重新构建
+# 如启用 MySQL Docker（有 docker-compose.mysql.yaml 时）
+docker compose -f docker-compose.yaml -f docker-compose.mysql.yaml ps
 ```
 
 ---
@@ -355,8 +359,8 @@ server:
 
 data:
   database:
-    driver: sqlite           # 数据库驱动
-    source: data/idea_arena.db
+    driver: sqlite           # sqlite 或 mysql
+    source: data/idea_arena.db # sqlite: 文件路径；mysql: DSN
 
 auth:
   jwt_secret: your-secret    # JWT 签名密钥（请修改）
@@ -383,6 +387,28 @@ notify:
     enabled: false
     webhook_url: ""          # 飞书机器人 Webhook
 ```
+
+### 数据库切换（本地 SQLite / 线上 MySQL）
+
+本项目后端支持通过 `backend/configs/config.yaml` 动态切换数据库：
+
+- 本地开发（默认）：
+```yaml
+data:
+  database:
+    driver: sqlite
+    source: data/idea_arena.db
+```
+- 线上部署（推荐）：
+```yaml
+data:
+  database:
+    driver: mysql
+    # Docker 同网络建议：mysql:3306；外部数据库可填 127.0.0.1:3306 或实际地址
+    source: user:password@tcp(mysql:3306)/idea_arena?charset=utf8mb4&parseTime=True&loc=Local
+```
+
+> 说明：项目中的长文本字段（如 `ideas.debate_log`）在 MySQL 使用 `LONGTEXT`，可存储包含 Emoji 的长内容。
 
 ### 前端环境变量 (`frontend/.env.local`)
 

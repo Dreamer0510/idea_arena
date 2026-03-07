@@ -8,7 +8,11 @@ server:
 
 data:
   database:
+    # 本地默认：sqlite
+    # 线上可切换：mysql
     driver: sqlite
+    # sqlite 示例: data/idea_arena.db
+    # mysql 示例: user:password@tcp(127.0.0.1:3306)/idea_arena?charset=utf8mb4&parseTime=True&loc=Local
     source: data/idea_arena.db
   redis:
     addr: localhost:6379
