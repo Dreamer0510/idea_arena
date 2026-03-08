@@ -17,6 +17,7 @@ type crawlerFetchOptions struct {
 	MinBackoff     time.Duration
 	MaxBackoff     time.Duration
 	DetectAntiBot  bool
+	CustomUA       string
 }
 
 var crawlerUserAgents = []string{
@@ -78,7 +79,11 @@ func fetchHTMLWithRetry(
 		if err != nil {
 			return "", err
 		}
-		req.Header.Set("User-Agent", randomUserAgent())
+		if options.CustomUA != "" {
+			req.Header.Set("User-Agent", options.CustomUA)
+		} else {
+			req.Header.Set("User-Agent", randomUserAgent())
+		}
 		if options.AcceptLanguage != "" {
 			req.Header.Set("Accept-Language", options.AcceptLanguage)
 		} else {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -91,10 +92,10 @@ func (p *SocialPainPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopi
 	// 来源 2: 百度热搜 — 中文 AI/科技痛点热点
 	addTopics(p.fetchBaiduPain(ctx, perSource))
 
-	// 来源 3: Bing RSS — 中文平台痛点（知乎/小红书关键词搜索，降级兜底）
+	// 来源 3: 小红书 — 直接抓取 explore 页面推荐笔记 + 百度移动端搜索回退
 	if len(allTopics) < limit {
 		remaining := limit - len(allTopics)
-		addTopics(p.fetchBingPain(ctx, remaining))
+		addTopics(p.fetchXHSPain(ctx, remaining))
 	}
 
 	p.log.Infof("[SocialPain] Fetched %d social pain topics", len(allTopics))
@@ -267,27 +268,198 @@ func (p *SocialPainPlugin) fetchBaiduPain(ctx context.Context, limit int) []*biz
 	return topics
 }
 
-// ── 来源 3: Bing RSS 痛点搜索（降级兜底）──
+// ── 来源 3: 小红书 explore 页面抓取 + 百度移动端搜索回退 ──
 
-func (p *SocialPainPlugin) fetchBingPain(ctx context.Context, limit int) []*biz.RawTopic {
-	queries := []string{
-		"知乎 AI 产品 痛点 吐槽",
-		"小红书 AI 工具 差评 体验",
+var xhsInitialStateRe = regexp.MustCompile(`__INITIAL_STATE__\s*=\s*(\{.+?)\s*</script>`)
+var xhsNoteBlockRe = regexp.MustCompile(`"id"\s*:\s*"([a-f0-9]{24})"\s*,\s*"modelType"\s*:\s*"note"\s*,\s*"noteCard"`)
+var xhsDisplayTitleRe = regexp.MustCompile(`"displayTitle"\s*:\s*"([^"]*)"`)
+var xhsLikedCountRe = regexp.MustCompile(`"likedCount"\s*:\s*"([^"]*)"`)
+var xhsNicknameRe = regexp.MustCompile(`"nickname"\s*:\s*"([^"]*)"`)
+
+func (p *SocialPainPlugin) fetchXHSPain(ctx context.Context, limit int) []*biz.RawTopic {
+	topics := p.fetchXHSExplore(ctx, limit)
+	if len(topics) > 0 {
+		return topics
 	}
+	p.log.Warnf("[SocialPain] XHS explore got 0, fallback to Baidu mobile search")
+	return p.fetchBaiduMobileXHS(ctx, limit)
+}
+
+func (p *SocialPainPlugin) fetchXHSExplore(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "https://www.xiaohongshu.com/explore", crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9",
+		Referer:        "https://www.xiaohongshu.com/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[SocialPain] XHS explore fetch error: %v", err)
+		return nil
+	}
+
+	// 提取 __INITIAL_STATE__ JSON
+	m := xhsInitialStateRe.FindStringSubmatch(body)
+	if len(m) < 2 {
+		p.log.Warnf("[SocialPain] XHS explore: __INITIAL_STATE__ not found")
+		return nil
+	}
+	stateJSON := strings.ReplaceAll(m[1], "undefined", "null")
+
+	// 定位所有 "id":"<24hex>","modelType":"note","noteCard" 块
+	blocks := xhsNoteBlockRe.FindAllStringSubmatchIndex(stateJSON, -1)
+	p.log.Infof("[SocialPain] XHS explore found %d note blocks", len(blocks))
+
+	type noteEntry struct {
+		noteID    string
+		title     string
+		nickname  string
+		likedCount string
+	}
+	var entries []noteEntry
+
+	for _, loc := range blocks {
+		// loc[2]:loc[3] = noteId 捕获组
+		noteID := stateJSON[loc[2]:loc[3]]
+		// 从 noteCard 开始向后取 2000 字符提取字段
+		start := loc[1]
+		end := start + 2000
+		if end > len(stateJSON) {
+			end = len(stateJSON)
+		}
+		chunk := stateJSON[start:end]
+
+		titleMatch := xhsDisplayTitleRe.FindStringSubmatch(chunk)
+		if len(titleMatch) < 2 || titleMatch[1] == "" {
+			continue
+		}
+
+		entry := noteEntry{noteID: noteID, title: titleMatch[1]}
+
+		if nm := xhsNicknameRe.FindStringSubmatch(chunk); len(nm) >= 2 {
+			entry.nickname = nm[1]
+		}
+		if lm := xhsLikedCountRe.FindStringSubmatch(chunk); len(lm) >= 2 {
+			entry.likedCount = lm[1]
+		}
+		entries = append(entries, entry)
+	}
+
+	p.log.Infof("[SocialPain] XHS explore parsed %d notes with titles", len(entries))
+
 	var topics []*biz.RawTopic
-	perQ := limit/len(queries) + 1
-	for _, q := range queries {
+	for _, e := range entries {
 		if len(topics) >= limit {
 			break
 		}
-		results := p.searchBingRSS(ctx, q, perQ)
-		for _, t := range results {
-			t.Source = "cn_social_pain"
-			t.Snippet = fmt.Sprintf("[社交痛点] %s", truncateStr(t.Snippet, 220))
-			topics = append(topics, t)
+		title := strings.TrimSpace(e.title)
+		if title == "" {
+			continue
 		}
+		noteURL := fmt.Sprintf("https://www.xiaohongshu.com/explore/%s", e.noteID)
+		pop := 100
+		if e.likedCount != "" {
+			if liked := parseXHSCount(e.likedCount); liked > 0 {
+				pop = liked
+			}
+		}
+		snippet := fmt.Sprintf("[小红书] %s", truncateStr(title, 200))
+		if e.nickname != "" {
+			snippet = fmt.Sprintf("[小红书] by %s: %s", e.nickname, truncateStr(title, 180))
+		}
+		topics = append(topics, &biz.RawTopic{
+			Title:      title,
+			URL:        noteURL,
+			Source:     "xhs_explore",
+			Popularity: pop,
+			Snippet:    snippet,
+		})
 	}
 	return topics
+}
+
+// parseXHSCount 解析小红书的计数字符串 "1.2万" -> 12000, "532" -> 532
+func parseXHSCount(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	multiplier := 1
+	if strings.HasSuffix(s, "万") {
+		multiplier = 10000
+		s = strings.TrimSuffix(s, "万")
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return 0
+	}
+	return int(f * float64(multiplier))
+}
+
+// fetchBaiduMobileXHS 百度移动端搜索小红书 AI 痛点内容（回退方案）
+func (p *SocialPainPlugin) fetchBaiduMobileXHS(ctx context.Context, limit int) []*biz.RawTopic {
+	query := "site:xiaohongshu.com AI 工具 产品 体验 测评"
+	searchURL := fmt.Sprintf("https://m.baidu.com/s?word=%s", url.QueryEscape(query))
+	body, err := fetchHTMLWithRetry(ctx, p.client, searchURL, crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9",
+		Referer:        "https://m.baidu.com/",
+		MaxRetries:     2,
+		DetectAntiBot:  true,
+		CustomUA:       "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+	})
+	if err != nil {
+		p.log.Warnf("[SocialPain] Baidu mobile XHS error: %v, fallback to Bing RSS", err)
+		return p.searchBingRSS(ctx, "小红书 AI 工具 产品 痛点 体验", limit)
+	}
+	topics := parseBaiduMobileToTopics(body, limit)
+	if len(topics) == 0 {
+		p.log.Warnf("[SocialPain] Baidu mobile XHS got 0, fallback to Bing RSS")
+		return p.searchBingRSS(ctx, "小红书 AI 工具 产品 痛点 体验", limit)
+	}
+	for _, t := range topics {
+		t.Source = "xhs_baidu"
+		t.Snippet = fmt.Sprintf("[小红书via百度] %s", truncateStr(t.Snippet, 200))
+	}
+	p.log.Infof("[SocialPain] Baidu mobile XHS: %d topics", len(topics))
+	return topics
+}
+
+// parseBaiduMobileToTopics 解析百度移动版搜索结果
+func parseBaiduMobileToTopics(html string, limit int) []*biz.RawTopic {
+	var topics []*biz.RawTopic
+	// 百度移动版搜索结果在 <div class="c-result"> 或 <div class="result"> 内
+	titleRe := regexp.MustCompile(`<a[^>]*class="[^"]*c-title-text[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)</a>`)
+	matches := titleRe.FindAllStringSubmatch(html, -1)
+	if len(matches) == 0 {
+		// 尝试更宽松的匹配
+		titleRe = regexp.MustCompile(`<a[^>]*href="([^"]*)"[^>]*>\s*<span[^>]*class="[^"]*title[^"]*"[^>]*>(.*?)</span>`)
+		matches = titleRe.FindAllStringSubmatch(html, -1)
+	}
+	for _, m := range matches {
+		if len(topics) >= limit {
+			break
+		}
+		if len(m) < 3 {
+			continue
+		}
+		link := strings.TrimSpace(m[1])
+		title := strings.TrimSpace(stripHTMLTags(m[2]))
+		if title == "" || link == "" {
+			continue
+		}
+		topics = append(topics, &biz.RawTopic{
+			Title:      title,
+			URL:        link,
+			Popularity: 100,
+			Snippet:    title,
+		})
+	}
+	return topics
+}
+
+// stripHTMLTags 移除 HTML 标签
+func stripHTMLTags(s string) string {
+	re := regexp.MustCompile(`<[^>]*>`)
+	return re.ReplaceAllString(s, "")
 }
 
 func (p *SocialPainPlugin) searchBingRSS(ctx context.Context, query string, limit int) []*biz.RawTopic {
