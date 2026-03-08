@@ -164,4 +164,11 @@ type DiscoveryRepo interface {
 	UpdateTopicAnalysis(ctx context.Context, id int64, recommendation string, score float64) error
 	SetTopicIdeaID(ctx context.Context, id int64, ideaID int64) error
 	ExistsByHash(ctx context.Context, hash string) (bool, error)
+
+	// 背压 & 生命周期管理
+	CountTopicsByStatus(ctx context.Context, status string) (int64, error)
+	DismissStaleTopics(ctx context.Context, olderThan time.Time) (int64, error)
+	DismissLowScoreTopics(ctx context.Context, maxScore float64) (int64, error)
+	TrimPendingTopics(ctx context.Context, keepTop int) (int64, error)
+	ListTopPendingTopics(ctx context.Context, limit int) ([]*DiscoveredTopic, error)
 }

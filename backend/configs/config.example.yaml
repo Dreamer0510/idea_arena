@@ -38,7 +38,7 @@ llm:
 
 debate:
   max_rounds: 20
-  max_concurrent: 2
+  max_concurrent: 4
   timeout: 1800s
   retry_count: 3
   graduation_score: 7.5

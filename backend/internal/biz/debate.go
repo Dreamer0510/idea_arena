@@ -457,6 +457,18 @@ func (uc *DebateUsecase) IsRunning(ideaID int64) bool {
 	return ok
 }
 
+// RunningCount 返回当前正在运行的辩论数量
+func (uc *DebateUsecase) RunningCount() int {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+	return len(uc.running)
+}
+
+// AvailableSlots 返回当前可用的并发辩论槽位数
+func (uc *DebateUsecase) AvailableSlots() int {
+	return cap(uc.semaphore) - len(uc.semaphore)
+}
+
 // runDebate 执行完整辩论流程
 func (uc *DebateUsecase) runDebate(ctx context.Context, idea *Idea, eventCh chan<- DebateEvent) {
 	ideaID := idea.ID
@@ -661,8 +673,19 @@ func (uc *DebateUsecase) runDebate(ctx context.Context, idea *Idea, eventCh chan
 		} else {
 			declineCount++
 		}
+		// 快速淘汰：连续下降3轮且最佳分<3.5 → 停止
+		if firstRoundScore < 7.0 && declineCount >= 3 && bestOverall < 3.5 {
+			uc.log.Infof("Idea %d fast early stop: scores declined 3 consecutive rounds and best=%.1f < 3.5", ideaID, bestOverall)
+			break
+		}
+		// 原早停：连续下降5轮且最佳分<4.0 → 停止
 		if firstRoundScore < 7.0 && declineCount >= 5 && bestOverall < 4.0 {
 			uc.log.Infof("Idea %d early stop: scores declined 5 consecutive rounds and best=%.1f < 4.0", ideaID, bestOverall)
+			break
+		}
+		// 深度淘汰：已跑5轮以上且当前分<4.0 → 停止
+		if firstRoundScore < 7.0 && round >= 5 && scores[3] < 4.0 {
+			uc.log.Infof("Idea %d deep early stop: round=%d >= 5 and current score=%.1f < 4.0", ideaID, round, scores[3])
 			break
 		}
 	}

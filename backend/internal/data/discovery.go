@@ -362,6 +362,69 @@ func (r *discoveryRepo) ExistsByHash(ctx context.Context, hash string) (bool, er
 	return count > 0, nil
 }
 
+// ---- 背压 & 生命周期管理 ----
+
+func (r *discoveryRepo) CountTopicsByStatus(ctx context.Context, status string) (int64, error) {
+	var count int64
+	db := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{})
+	if status != "" {
+		db = db.Where("status = ?", status)
+	}
+	if err := db.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *discoveryRepo) DismissStaleTopics(ctx context.Context, olderThan time.Time) (int64, error) {
+	result := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{}).
+		Where("status = ? AND discovered_at < ?", "pending", olderThan).
+		Update("status", "dismissed")
+	return result.RowsAffected, result.Error
+}
+
+func (r *discoveryRepo) DismissLowScoreTopics(ctx context.Context, maxScore float64) (int64, error) {
+	result := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{}).
+		Where("status = ? AND recommend_score < ?", "pending", maxScore).
+		Update("status", "dismissed")
+	return result.RowsAffected, result.Error
+}
+
+func (r *discoveryRepo) TrimPendingTopics(ctx context.Context, keepTop int) (int64, error) {
+	// 保留 recommend_score 最高的 keepTop 条 pending，其余 dismiss
+	var keepIDs []int64
+	if err := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{}).
+		Where("status = ?", "pending").
+		Order("recommend_score DESC, discovered_at DESC").
+		Limit(keepTop).
+		Pluck("id", &keepIDs).Error; err != nil {
+		return 0, err
+	}
+	if len(keepIDs) == 0 {
+		return 0, nil
+	}
+	result := r.data.db.WithContext(ctx).Model(&DiscoveredTopicModel{}).
+		Where("status = ? AND id NOT IN ?", "pending", keepIDs).
+		Update("status", "dismissed")
+	return result.RowsAffected, result.Error
+}
+
+func (r *discoveryRepo) ListTopPendingTopics(ctx context.Context, limit int) ([]*biz.DiscoveredTopic, error) {
+	var models []DiscoveredTopicModel
+	if err := r.data.db.WithContext(ctx).
+		Where("status = ?", "pending").
+		Order("recommend_score DESC, discovered_at DESC").
+		Limit(limit).
+		Find(&models).Error; err != nil {
+		return nil, err
+	}
+	result := make([]*biz.DiscoveredTopic, len(models))
+	for i, m := range models {
+		result[i] = toDiscoveredTopicBiz(&m)
+	}
+	return result, nil
+}
+
 func toDiscoveredTopicBiz(m *DiscoveredTopicModel) *biz.DiscoveredTopic {
 	return &biz.DiscoveredTopic{
 		ID:                m.ID,

@@ -531,7 +531,12 @@ func (uc *DiscoveryUsecase) SubmitToDebate(ctx context.Context, topicID int64) (
 
 // RunDiscovery 手动触发一次话题发现（仅发现，不自动辩论）
 func (uc *DiscoveryUsecase) RunDiscovery(ctx context.Context) (int, error) {
-	topics, err := uc.fetchAndDedup(ctx)
+	settings, _ := uc.GetSettings(ctx)
+	limit := 10
+	if settings != nil && settings.TopicsPerSource > 0 {
+		limit = settings.TopicsPerSource
+	}
+	topics, err := uc.fetchAndDedupWithLimit(ctx, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -545,62 +550,265 @@ func (uc *DiscoveryUsecase) RunDiscovery(ctx context.Context) (int, error) {
 	return len(topics), nil
 }
 
-// RunAutoDiscoveryAndDebate 全自动流程：发现 → AI精选 → 自动创建Idea → 启动辩论
+// 背压 & 生命周期常量
+const (
+	backpressureSkipThreshold = 50 // pending > 50 → 跳过抓取
+	backpressureHalfThreshold = 30 // pending 30-50 → 减半抓取
+	staleTopicDays            = 7  // pending 超过 7 天 → 自动 dismiss
+	lowScoreDismissThreshold  = 3.0
+	pendingTopicCap           = 50 // pending 上限
+)
+
+// RunAutoDiscoveryAndDebate 全自动流程：清理 → 背压发现 → 全量精选 → 创建Idea → 启动辩论 → 消化存量
 func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int, error) {
 	uc.log.Info("[AutoDiscovery] ========== 全自动发现+辩论流程开始 ==========")
 
-	// Step 1: 从所有渠道抓取并去重
-	newTopics, err := uc.fetchAndDedup(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("fetch topics: %w", err)
-	}
-	uc.log.Infof("[AutoDiscovery] Step1: 各渠道共发现 %d 个新话题", len(newTopics))
+	// Step 0: 话题生命周期清理
+	uc.cleanupStaleTopics(ctx)
 
-	// Step 2: 获取所有已有项目的丰富摘要用于语义去重
+	// Step 1: 背压检查 — 根据 pending 数量决定是否抓取
+	pendingCount, _ := uc.repo.CountTopicsByStatus(ctx, "pending")
+	uc.log.Infof("[AutoDiscovery] Step1: 当前 pending topics = %d", pendingCount)
+
+	settings, _ := uc.GetSettings(ctx)
+	if settings == nil {
+		settings = DefaultSettings()
+	}
+	limit := settings.TopicsPerSource
+	if limit <= 0 {
+		limit = 10
+	}
+
+	switch {
+	case pendingCount > int64(backpressureSkipThreshold):
+		uc.log.Infof("[AutoDiscovery] 背压触发：pending=%d > %d，跳过本轮抓取，专注消化存量", pendingCount, backpressureSkipThreshold)
+		// 不抓取，直接进入精选和辩论
+	case pendingCount > int64(backpressureHalfThreshold):
+		halfLimit := limit / 2
+		if halfLimit < 1 {
+			halfLimit = 1
+		}
+		uc.log.Infof("[AutoDiscovery] 背压减半：pending=%d，topics_per_source %d → %d", pendingCount, limit, halfLimit)
+		newTopics, err := uc.fetchAndDedupWithLimit(ctx, halfLimit)
+		if err != nil {
+			uc.log.Warnf("[AutoDiscovery] fetch error: %v", err)
+		} else {
+			uc.log.Infof("[AutoDiscovery] 减半抓取发现 %d 个新话题", len(newTopics))
+		}
+	default:
+		newTopics, err := uc.fetchAndDedupWithLimit(ctx, limit)
+		if err != nil {
+			uc.log.Warnf("[AutoDiscovery] fetch error: %v", err)
+		} else {
+			uc.log.Infof("[AutoDiscovery] 正常抓取发现 %d 个新话题", len(newTopics))
+		}
+	}
+
+	// Step 2: 获取已有项目摘要用于语义去重
+	existingSummaries := uc.buildExistingSummaries(ctx)
+	uc.log.Infof("[AutoDiscovery] Step2: 已有 %d 个项目用于语义去重", len(existingSummaries))
+
+	// Step 3: 从全量 pending 池中取 top-N 候选（不只新批次）
+	availableSlots := 0
+	if uc.debateUc != nil {
+		availableSlots = uc.debateUc.AvailableSlots()
+	}
+	if availableSlots <= 0 {
+		uc.log.Info("[AutoDiscovery] 无可用辩论槽位，跳过精选。尝试消化存量 pending ideas")
+		drained := uc.drainPendingIdeas(ctx)
+		return drained, nil
+	}
+
+	// 动态配额：可用槽位数即为精选上限，候选池取 3 倍
+	selectionQuota := availableSlots
+	candidatePoolSize := selectionQuota * 3
+	if candidatePoolSize < 10 {
+		candidatePoolSize = 10
+	}
+
+	candidates, err := uc.repo.ListTopPendingTopics(ctx, candidatePoolSize)
+	if err != nil || len(candidates) == 0 {
+		uc.log.Info("[AutoDiscovery] 无 pending 候选话题")
+		drained := uc.drainPendingIdeas(ctx)
+		return drained, nil
+	}
+	uc.log.Infof("[AutoDiscovery] Step3: 从全量 pending 池取 %d 个候选（可用槽位=%d，配额=%d）", len(candidates), availableSlots, selectionQuota)
+
+	// Step 4: 语义去重阈值门禁
+	filteredTopics, reviewCount, dismissedCount := uc.applySemanticDedupThreshold(ctx, candidates, existingSummaries)
+	uc.log.Infof("[AutoDiscovery] Step4: 语义过滤后保留 %d，人工复核 %d，自动过滤 %d", len(filteredTopics), reviewCount, dismissedCount)
+	if len(filteredTopics) == 0 {
+		uc.log.Info("[AutoDiscovery] 语义过滤后无候选")
+		drained := uc.drainPendingIdeas(ctx)
+		return drained, nil
+	}
+
+	// Step 5: AI 统一决策 — 动态配额精选
+	selected, err := uc.aiSelectTopicsWithQuota(ctx, filteredTopics, existingSummaries, selectionQuota)
+	if err != nil {
+		uc.log.Warnf("[AutoDiscovery] AI selection failed: %v, using top topics by score", err)
+		selected = uc.fallbackSelect(filteredTopics, selectionQuota)
+	}
+
+	if len(selected) == 0 {
+		uc.log.Info("[AutoDiscovery] AI 未精选任何话题")
+		drained := uc.drainPendingIdeas(ctx)
+		return drained, nil
+	}
+
+	uc.log.Infof("[AutoDiscovery] Step5: AI精选了 %d 个话题进行辩论", len(selected))
+
+	// Step 6: 为精选话题创建 Idea 并启动辩论
+	debateCount := uc.startDebatesForSelected(ctx, selected)
+
+	// Step 7: 消化存量 pending ideas（如果还有空闲槽位）
+	drained := uc.drainPendingIdeas(ctx)
+	totalStarted := debateCount + drained
+
+	uc.log.Infof("[AutoDiscovery] ========== 完成：精选 %d + 存量消化 %d = 共启动 %d 场辩论 ==========", debateCount, drained, totalStarted)
+	return totalStarted, nil
+}
+
+// buildExistingSummaries 构建已有项目摘要列表
+func (uc *DiscoveryUsecase) buildExistingSummaries(ctx context.Context) []existingIdeaSummary {
 	existingIdeas, _ := uc.ideaRepo.List(ctx, &IdeaListQuery{Page: 1, PageSize: 200, SortBy: "created_at", SortOrder: "desc"})
-	var existingSummaries []existingIdeaSummary
+	var summaries []existingIdeaSummary
 	if existingIdeas != nil {
 		for _, idea := range existingIdeas.Items {
-			s := existingIdeaSummary{
+			summaries = append(summaries, existingIdeaSummary{
 				ProductName: idea.ProductName,
 				Topic:       idea.Topic,
 				OneLiner:    idea.OneLiner,
 				Tags:        idea.Tags,
 				Score:       idea.ScoreOverall,
 				Status:      idea.Status,
-			}
-			existingSummaries = append(existingSummaries, s)
+			})
 		}
 	}
-	uc.log.Infof("[AutoDiscovery] Step2: 已有 %d 个项目用于语义去重", len(existingSummaries))
+	return summaries
+}
 
-	// Step 3: 语义去重阈值门禁（>0.85 自动过滤，0.75~0.85 人工复核）
-	filteredTopics, reviewCount, dismissedCount := uc.applySemanticDedupThreshold(ctx, newTopics, existingSummaries)
-	uc.log.Infof("[AutoDiscovery] Step3: 语义阈值过滤后保留 %d，人工复核 %d，自动过滤 %d", len(filteredTopics), reviewCount, dismissedCount)
-	if len(filteredTopics) == 0 {
-		uc.log.Info("[AutoDiscovery] No topics left after semantic threshold filter")
-		return 0, nil
+// cleanupStaleTopics 话题生命周期清理
+func (uc *DiscoveryUsecase) cleanupStaleTopics(ctx context.Context) {
+	// 1. 超过 7 天的 pending → dismiss
+	staleTime := time.Now().AddDate(0, 0, -staleTopicDays)
+	staleCount, err := uc.repo.DismissStaleTopics(ctx, staleTime)
+	if err == nil && staleCount > 0 {
+		uc.log.Infof("[Cleanup] 清理过期话题: %d 条（>%d天）", staleCount, staleTopicDays)
 	}
 
-	// Step 4: AI 统一决策 — 从可自动进入流程的话题中精选最佳 1-3 个（严格去重）
-	selected, err := uc.aiSelectTopics(ctx, filteredTopics, existingSummaries)
+	// 2. 低分 pending → dismiss
+	lowCount, err := uc.repo.DismissLowScoreTopics(ctx, lowScoreDismissThreshold)
+	if err == nil && lowCount > 0 {
+		uc.log.Infof("[Cleanup] 清理低分话题: %d 条（score<%.1f）", lowCount, lowScoreDismissThreshold)
+	}
+
+	// 3. pending 上限裁剪
+	trimCount, err := uc.repo.TrimPendingTopics(ctx, pendingTopicCap)
+	if err == nil && trimCount > 0 {
+		uc.log.Infof("[Cleanup] 裁剪超限话题: %d 条（保留 top %d）", trimCount, pendingTopicCap)
+	}
+}
+
+// fetchAndDedupWithLimit 带自定义 limit 的抓取去重
+func (uc *DiscoveryUsecase) fetchAndDedupWithLimit(ctx context.Context, limit int) ([]*DiscoveredTopic, error) {
+	// 获取启用的插件
+	dbPlugins, err := uc.repo.ListPlugins(ctx)
 	if err != nil {
-		uc.log.Warnf("[AutoDiscovery] AI selection failed: %v, using top topics by score", err)
-		// 降级：直接取前3个
-		selected = uc.fallbackSelect(filteredTopics, 3)
+		return nil, err
+	}
+	enabledPlugins := make(map[string]bool)
+	for _, p := range dbPlugins {
+		enabledPlugins[p.Name] = p.Enabled
 	}
 
-	if len(selected) == 0 {
-		uc.log.Info("[AutoDiscovery] No topics selected for debate")
-		return 0, nil
+	batchID := fmt.Sprintf("batch_%d", time.Now().Unix())
+	var allRawTopics []*RawTopic
+
+	uc.pluginsMu.RLock()
+	for name, plugin := range uc.plugins {
+		if !enabledPlugins[name] {
+			continue
+		}
+		uc.log.Infof("[Discovery] Fetching from plugin: %s (limit=%d)", name, limit)
+		topics, fetchErr := plugin.Fetch(ctx, limit)
+		if fetchErr != nil {
+			uc.log.Warnf("[Discovery] Plugin %s fetch error: %v", name, fetchErr)
+			continue
+		}
+		uc.log.Infof("[Discovery] Plugin %s returned %d topics", name, len(topics))
+		allRawTopics = append(allRawTopics, topics...)
+	}
+	uc.pluginsMu.RUnlock()
+
+	if len(allRawTopics) == 0 {
+		return nil, nil
 	}
 
-	uc.log.Infof("[AutoDiscovery] Step4: AI精选了 %d 个话题进行辩论", len(selected))
+	sourceFactors := uc.buildSourceFeedbackFactors(ctx)
+	var newTopics []*DiscoveredTopic
+	for _, rt := range allRawTopics {
+		hash := contentHash(rt.Title, rt.Source)
+		exists, err := uc.repo.ExistsByHash(ctx, hash)
+		if err != nil || exists {
+			continue
+		}
+		painScore, trendScore, feasibilityScore, monetizationScore, noveltyScore, totalScore := calculateRuleScores(rt)
+		totalScore = applySourceFeedbackFactor(totalScore, sourceFactors[rt.Source])
+		newTopics = append(newTopics, &DiscoveredTopic{
+			Title:             rt.Title,
+			Source:            rt.Source,
+			SourceURL:         rt.URL,
+			Popularity:        rt.Popularity,
+			Replies:           rt.Replies,
+			Snippet:           rt.Snippet,
+			ContentHash:       hash,
+			Status:            "pending",
+			PainScore:         painScore,
+			TrendScore:        trendScore,
+			FeasibilityScore:  feasibilityScore,
+			MonetizationScore: monetizationScore,
+			NoveltyScore:      noveltyScore,
+			RecommendScore:    totalScore,
+			BatchID:           batchID,
+		})
+	}
 
-	// Step 5: 为每个精选话题创建 Idea 并启动辩论
+	if len(newTopics) == 0 {
+		return nil, nil
+	}
+
+	if err := uc.repo.SaveTopics(ctx, newTopics); err != nil {
+		return nil, fmt.Errorf("save topics: %w", err)
+	}
+	uc.log.Infof("[Discovery] Saved %d new topics", len(newTopics))
+	return newTopics, nil
+}
+
+// aiSelectTopicsWithQuota AI精选（动态配额）
+func (uc *DiscoveryUsecase) aiSelectTopicsWithQuota(ctx context.Context, topics []*DiscoveredTopic, existingIdeas []existingIdeaSummary, quota int) ([]SelectedTopic, error) {
+	if quota <= 0 {
+		quota = 1
+	}
+	if quota > 6 {
+		quota = 6
+	}
+
+	// 复用已有的 aiSelectTopics，但修改上限为 quota
+	selected, err := uc.aiSelectTopics(ctx, topics, existingIdeas)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) > quota {
+		selected = selected[:quota]
+	}
+	return selected, nil
+}
+
+// startDebatesForSelected 为精选话题创建 Idea 并启动辩论
+func (uc *DiscoveryUsecase) startDebatesForSelected(ctx context.Context, selected []SelectedTopic) int {
 	debateCount := 0
 	for _, sel := range selected {
-		// 创建 Idea
 		idea, err := uc.ideaRepo.Create(ctx, &Idea{
 			Topic:  sel.Topic,
 			Status: "pending",
@@ -610,19 +818,16 @@ func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int,
 			continue
 		}
 
-		// 关联 discovered_topic（如果有的话）
 		if sel.DiscoveredTopicID > 0 {
 			_ = uc.repo.SetTopicIdeaID(ctx, sel.DiscoveredTopicID, idea.ID)
 		}
 
 		uc.log.Infof("[AutoDiscovery] Created Idea #%d: %s (reason: %s)", idea.ID, sel.Topic, sel.Reason)
 
-		// 启动辩论（异步）
 		if uc.debateUc != nil {
 			eventCh := make(chan DebateEvent, 100)
 			go func(ch <-chan DebateEvent, ideaID int64) {
 				for range ch {
-					// drain events — auto debates don't have SSE listeners
 				}
 				uc.log.Infof("[AutoDiscovery] Idea #%d debate finished", ideaID)
 			}(eventCh, idea.ID)
@@ -635,9 +840,53 @@ func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int,
 			uc.log.Infof("[AutoDiscovery] Started debate for Idea #%d: %s", idea.ID, sel.Topic)
 		}
 	}
+	return debateCount
+}
 
-	uc.log.Infof("[AutoDiscovery] ========== 完成：精选 %d 个话题，启动 %d 场辩论 ==========", len(selected), debateCount)
-	return debateCount, nil
+// drainPendingIdeas 消化存量 pending ideas — 自动启动等待中的辩论
+func (uc *DiscoveryUsecase) drainPendingIdeas(ctx context.Context) int {
+	if uc.debateUc == nil {
+		return 0
+	}
+
+	availableSlots := uc.debateUc.AvailableSlots()
+	if availableSlots <= 0 {
+		return 0
+	}
+
+	// 查找 pending ideas
+	result, err := uc.ideaRepo.List(ctx, &IdeaListQuery{
+		Page: 1, PageSize: availableSlots, Status: "pending", SortBy: "created_at", SortOrder: "asc",
+	})
+	if err != nil || result == nil || len(result.Items) == 0 {
+		return 0
+	}
+
+	started := 0
+	for _, idea := range result.Items {
+		if uc.debateUc.AvailableSlots() <= 0 {
+			break
+		}
+
+		eventCh := make(chan DebateEvent, 100)
+		go func(ch <-chan DebateEvent, ideaID int64) {
+			for range ch {
+			}
+			uc.log.Infof("[DrainPending] Idea #%d debate finished", ideaID)
+		}(eventCh, idea.ID)
+
+		if err := uc.debateUc.StartDebate(context.Background(), idea.ID, eventCh); err != nil {
+			uc.log.Warnf("[DrainPending] Start debate for Idea #%d failed: %v", idea.ID, err)
+			continue
+		}
+		started++
+		uc.log.Infof("[DrainPending] Started debate for pending Idea #%d: %s", idea.ID, idea.Topic)
+	}
+
+	if started > 0 {
+		uc.log.Infof("[DrainPending] 消化了 %d 个存量 pending ideas", started)
+	}
+	return started
 }
 
 // existingIdeaSummary 已有项目摘要（用于语义去重）
@@ -664,100 +913,6 @@ const (
 	sourceFeedbackMinSample       = 5
 )
 
-// fetchAndDedup 从所有渠道抓取话题并去重保存
-func (uc *DiscoveryUsecase) fetchAndDedup(ctx context.Context) ([]*DiscoveredTopic, error) {
-	settings, err := uc.GetSettings(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	limit := settings.TopicsPerSource
-	if limit <= 0 {
-		limit = 10
-	}
-
-	// 获取启用的插件
-	dbPlugins, err := uc.repo.ListPlugins(ctx)
-	if err != nil {
-		return nil, err
-	}
-	enabledPlugins := make(map[string]bool)
-	for _, p := range dbPlugins {
-		enabledPlugins[p.Name] = p.Enabled
-	}
-
-	batchID := fmt.Sprintf("batch_%d", time.Now().Unix())
-	var allRawTopics []*RawTopic
-
-	// 从各启用的插件抓取
-	uc.pluginsMu.RLock()
-	for name, plugin := range uc.plugins {
-		if !enabledPlugins[name] {
-			continue
-		}
-
-		uc.log.Infof("[Discovery] Fetching from plugin: %s", name)
-		topics, fetchErr := plugin.Fetch(ctx, limit)
-		if fetchErr != nil {
-			uc.log.Warnf("[Discovery] Plugin %s fetch error: %v", name, fetchErr)
-			continue
-		}
-		uc.log.Infof("[Discovery] Plugin %s returned %d topics", name, len(topics))
-		allRawTopics = append(allRawTopics, topics...)
-	}
-	uc.pluginsMu.RUnlock()
-
-	if len(allRawTopics) == 0 {
-		uc.log.Info("[Discovery] No topics fetched from any plugin")
-		return nil, nil
-	}
-
-	// 去重：计算 content hash，过滤已存在的
-	sourceFactors := uc.buildSourceFeedbackFactors(ctx)
-	var newTopics []*DiscoveredTopic
-	for _, rt := range allRawTopics {
-		hash := contentHash(rt.Title, rt.Source)
-		exists, err := uc.repo.ExistsByHash(ctx, hash)
-		if err != nil {
-			continue
-		}
-		if exists {
-			continue
-		}
-		painScore, trendScore, feasibilityScore, monetizationScore, noveltyScore, totalScore := calculateRuleScores(rt)
-		totalScore = applySourceFeedbackFactor(totalScore, sourceFactors[rt.Source])
-		newTopics = append(newTopics, &DiscoveredTopic{
-			Title:             rt.Title,
-			Source:            rt.Source,
-			SourceURL:         rt.URL,
-			Popularity:        rt.Popularity,
-			Replies:           rt.Replies,
-			Snippet:           rt.Snippet,
-			ContentHash:       hash,
-			Status:            "pending",
-			PainScore:         painScore,
-			TrendScore:        trendScore,
-			FeasibilityScore:  feasibilityScore,
-			MonetizationScore: monetizationScore,
-			NoveltyScore:      noveltyScore,
-			RecommendScore:    totalScore,
-			BatchID:           batchID,
-		})
-	}
-
-	if len(newTopics) == 0 {
-		uc.log.Info("[Discovery] All topics already exist (dedup)")
-		return nil, nil
-	}
-
-	// 保存到 DB
-	if err := uc.repo.SaveTopics(ctx, newTopics); err != nil {
-		return nil, fmt.Errorf("save topics: %w", err)
-	}
-
-	uc.log.Infof("[Discovery] Saved %d new topics", len(newTopics))
-	return newTopics, nil
-}
 
 // aiSelectTopics AI统一决策：从所有发现的话题中精选最佳1-3个进行辩论（严格语义去重）
 func (uc *DiscoveryUsecase) aiSelectTopics(ctx context.Context, topics []*DiscoveredTopic, existingIdeas []existingIdeaSummary) ([]SelectedTopic, error) {
@@ -1104,15 +1259,48 @@ func (uc *DiscoveryUsecase) StartScheduler(ctx context.Context) {
 				uc.log.Infof("[Scheduler] ✅ 全自动流程完成，启动了 %d 场辩论", count)
 			}
 
-			uc.log.Infof("[Scheduler] 下次执行: %s 后", interval)
+			// 自适应间隔：根据 pending 数量动态调整
+			adaptiveInterval := uc.computeAdaptiveInterval(interval)
+			uc.log.Infof("[Scheduler] 下次执行: %s 后", adaptiveInterval)
 			select {
-			case <-time.After(interval):
+			case <-time.After(adaptiveInterval):
 			case <-uc.stopCh:
 				uc.log.Info("[Scheduler] 调度器已停止")
 				return
 			}
 		}
 	}()
+}
+
+// computeAdaptiveInterval 根据 pending 数量动态调整调度间隔
+func (uc *DiscoveryUsecase) computeAdaptiveInterval(baseInterval time.Duration) time.Duration {
+	pendingCount, _ := uc.repo.CountTopicsByStatus(context.Background(), "pending")
+
+	switch {
+	case pendingCount > int64(backpressureSkipThreshold):
+		// pending 很多，缩短间隔加速消化（最低 10 分钟）
+		short := 10 * time.Minute
+		uc.log.Infof("[Scheduler] 自适应: pending=%d > %d，间隔缩短至 %s", pendingCount, backpressureSkipThreshold, short)
+		return short
+	case pendingCount > int64(backpressureHalfThreshold):
+		// pending 中等，适度缩短
+		medium := baseInterval * 3 / 4
+		if medium < 15*time.Minute {
+			medium = 15 * time.Minute
+		}
+		uc.log.Infof("[Scheduler] 自适应: pending=%d，间隔调整为 %s", pendingCount, medium)
+		return medium
+	case pendingCount < 20:
+		// pending 很少，延长间隔节省资源
+		long := baseInterval * 3 / 2
+		if long > 90*time.Minute {
+			long = 90 * time.Minute
+		}
+		uc.log.Infof("[Scheduler] 自适应: pending=%d < 20，间隔延长至 %s", pendingCount, long)
+		return long
+	default:
+		return baseInterval
+	}
 }
 
 // resumeStalledDebates 恢复被服务重启中断的辩论
