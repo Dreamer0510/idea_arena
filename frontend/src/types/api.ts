@@ -1,7 +1,7 @@
 export interface IdeaInfo {
   id: number;
   topic: string;
-  status: "pending" | "debating" | "graduated" | "failed";
+  status: "pending" | "debating" | "graduated" | "promising" | "failed";
   product_name: string;
   one_liner: string;
   score_feasibility: number;
@@ -22,6 +22,25 @@ export interface IdeaDetail extends IdeaInfo {
   dev_prompt: string;
   search_data: string;
   judge_refined: string;
+  vote_result: string;
+}
+
+export interface VoteEntry {
+  voter: string;
+  model: string;
+  vote: "YES" | "NO" | "CONDITIONAL";
+  confidence: number;
+  key_reason: string;
+  risks: string[];
+  strengths: string[];
+}
+
+export interface VoteResultData {
+  votes: VoteEntry[];
+  final_verdict: string;
+  yes_count: number;
+  no_count: number;
+  cond_count: number;
 }
 
 export interface ListIdeasResponse {

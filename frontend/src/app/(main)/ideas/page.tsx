@@ -146,6 +146,7 @@ export default function IdeasPage() {
           >
             <option value="">全部状态</option>
             <option value="graduated">已毕业</option>
+            <option value="promising">有潜力</option>
             <option value="debating">辩论中</option>
             <option value="pending">等待中</option>
             <option value="failed">未通过</option>

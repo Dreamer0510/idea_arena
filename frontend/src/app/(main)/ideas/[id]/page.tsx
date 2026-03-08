@@ -21,6 +21,7 @@ import { VerdictBadge, TagChip } from "@/components/ideas/badges";
 import { ScoreSparkline } from "@/components/ideas/score-sparkline";
 import { DebatePipeline } from "@/components/ideas/debate-pipeline";
 import type { DebateRound } from "@/components/ideas/debate-pipeline";
+import type { VoteResultData, VoteEntry } from "@/types/api";
 
 /* ───────── Types ───────── */
 interface ParsedDebateLog {
@@ -66,6 +67,16 @@ export default function IdeaDetailPage() {
       return null;
     }
   }, [idea?.debate_log]);
+
+  // Parse vote result JSON
+  const voteResult = useMemo<VoteResultData | null>(() => {
+    if (!idea?.vote_result) return null;
+    try {
+      return JSON.parse(idea.vote_result);
+    } catch {
+      return null;
+    }
+  }, [idea?.vote_result]);
 
   // Auto-scroll to latest event
   useEffect(() => {
@@ -226,6 +237,11 @@ export default function IdeaDetailPage() {
             </div>
           </div>
         </motion.div>
+      )}
+
+      {/* ═══ Voting Panel ═══ */}
+      {voteResult && voteResult.votes.length > 0 && (
+        <VotingPanel voteResult={voteResult} />
       )}
 
       {/* ═══ Start Debate ═══ */}
@@ -494,6 +510,7 @@ const liveEventConfig: Record<string, { color: string; label: string }> = {
   eval: { color: "border-l-violet-500 bg-violet-500/5", label: "评估" },
   judge_assess: { color: "border-l-amber-500 bg-amber-500/5", label: "精修评估" },
   judge_refine: { color: "border-l-pink-500 bg-pink-500/5", label: "判官精修" },
+  vote: { color: "border-l-purple-500 bg-purple-500/5", label: "投票" },
   judge: { color: "border-l-indigo-500 bg-indigo-500/5", label: "终极仲裁" },
   meta: { color: "border-l-slate-500 bg-slate-500/5", label: "元数据" },
   summary: { color: "border-l-teal-500 bg-teal-500/5", label: "摘要" },
@@ -543,6 +560,88 @@ function MiniScore({ label, value, highlight }: { label: string; value: number; 
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`text-lg font-bold ${sc.text}`}>{value.toFixed(1)}</div>
     </div>
+  );
+}
+
+/* ───────── Voting Panel ───────── */
+function VotingPanel({ voteResult }: { voteResult: VoteResultData }) {
+  const verdictConfig: Record<string, { color: string; bg: string; label: string }> = {
+    YES: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10 border-green-500/25", label: "可行" },
+    NO: { color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10 border-red-500/25", label: "不可行" },
+    CONDITIONAL: { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10 border-amber-500/25", label: "有条件可行" },
+  };
+
+  const finalCfg = verdictConfig[voteResult.final_verdict] || verdictConfig.CONDITIONAL;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.5 }}>
+      <div className="rounded-2xl border bg-card overflow-hidden">
+        <div className="px-6 py-4 border-b flex items-center justify-between bg-muted/30">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/25 flex items-center justify-center">
+              <span className="text-base">🗳️</span>
+            </div>
+            <h2 className="text-base font-bold tracking-tight">多模型投票</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border ${finalCfg.bg} ${finalCfg.color}`}>
+              {finalCfg.label}
+            </span>
+            <span className="text-xs text-muted-foreground font-mono">
+              {voteResult.yes_count}Y / {voteResult.no_count}N / {voteResult.cond_count}C
+            </span>
+          </div>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          {voteResult.votes.map((vote, i) => {
+            const cfg = verdictConfig[vote.vote] || verdictConfig.CONDITIONAL;
+            return (
+              <div key={i} className={`rounded-xl border p-4 space-y-3 ${cfg.bg}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-sm">{vote.voter}</div>
+                    <div className="text-[10px] text-muted-foreground font-mono">{vote.model}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-lg font-black ${cfg.color}`}>{vote.vote}</div>
+                    <div className="text-[10px] text-muted-foreground">置信度 {Math.round(vote.confidence * 100)}%</div>
+                  </div>
+                </div>
+
+                <p className="text-sm font-medium leading-relaxed">{vote.key_reason}</p>
+
+                {vote.strengths && vote.strengths.length > 0 && (
+                  <div>
+                    <div className="text-[10px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wider mb-1">优势</div>
+                    <div className="flex flex-wrap gap-1">
+                      {vote.strengths.map((s, j) => (
+                        <span key={j} className="text-[11px] px-2 py-0.5 rounded-full bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/20">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {vote.risks && vote.risks.length > 0 && (
+                  <div>
+                    <div className="text-[10px] font-semibold text-red-600 dark:text-red-400 uppercase tracking-wider mb-1">风险</div>
+                    <div className="flex flex-wrap gap-1">
+                      {vote.risks.map((r, j) => (
+                        <span key={j} className="text-[11px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-700 dark:text-red-300 border border-red-500/20">
+                          {r}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
