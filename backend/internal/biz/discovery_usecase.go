@@ -26,6 +26,7 @@ type DiscoveryUsecase struct {
 
 	providerManager *llm.ProviderManager
 	providerRepo    ProviderRepository
+	agentRepo       AgentConfigRepository
 
 	plugins   map[string]CrawlerPluginInterface
 	pluginsMu sync.RWMutex
@@ -59,9 +60,35 @@ func (uc *DiscoveryUsecase) SetDebateUsecase(debateUc *DebateUsecase) {
 }
 
 // SetProviderManager 注入多服务商调用能力（用于插件 AI 扩展）
-func (uc *DiscoveryUsecase) SetProviderManager(pm *llm.ProviderManager, providerRepo ProviderRepository) {
+func (uc *DiscoveryUsecase) SetProviderManager(pm *llm.ProviderManager, providerRepo ProviderRepository, agentRepo AgentConfigRepository) {
 	uc.providerManager = pm
 	uc.providerRepo = providerRepo
+	uc.agentRepo = agentRepo
+}
+
+// callAgent 智能调用 Agent：优先使用服务商系统，回退到 config.yaml 配置
+func (uc *DiscoveryUsecase) callAgent(ctx context.Context, agentID string, defaultAgent *llm.Agent, messages []llm.Message) (string, error) {
+	if uc.agentRepo != nil && uc.providerManager != nil {
+		agentCfg, err := uc.agentRepo.GetByID(ctx, agentID)
+		if err == nil && agentCfg != nil && agentCfg.ProviderID > 0 && agentCfg.ModelName != "" {
+			systemPrompt := agentCfg.SystemPrompt
+			if systemPrompt == "" && defaultAgent != nil {
+				systemPrompt = defaultAgent.SystemPrompt
+			}
+			opts := &llm.CallOptions{Temperature: agentCfg.Temperature}
+			result, err := uc.providerManager.CallWithProvider(ctx, agentCfg.ProviderID, agentCfg.ModelName, systemPrompt, messages, opts)
+			if err != nil {
+				uc.log.Warnf("[Discovery] Provider call failed for agent %s (provider=%d model=%s): %v, falling back",
+					agentID, agentCfg.ProviderID, agentCfg.ModelName, err)
+			} else {
+				return result, nil
+			}
+		}
+	}
+	if defaultAgent == nil {
+		return "", fmt.Errorf("agent %s not found and no default available", agentID)
+	}
+	return uc.llmClient.CallWithRole(ctx, defaultAgent.Role, defaultAgent.SystemPrompt, messages)
 }
 
 // RegisterPlugin 注册爬虫插件
@@ -961,36 +988,9 @@ func (uc *DiscoveryUsecase) aiSelectTopics(ctx context.Context, topics []*Discov
 		constraintStr = fmt.Sprintf("\n\n## 核心约束条件（必须满足）\n%s", strings.Join(lines, "\n"))
 	}
 
-	selectorPrompt := `你是 AI 创业话题精选决策器。你的核心职责是从候选话题中精选出**真正有新意、与已有项目不重复**的创业方向。
-
-## ⚠️ 最高优先级：严格语义去重
-你会收到一份"已有项目列表"，包含每个项目的产品名、话题、一句话描述和标签。
-你必须逐个对比候选话题与已有项目，判断是否存在**语义重复**：
-- **同一赛道的类似产品** = 重复（如"AI写作助手"和"AI内容生成工具"）
-- **换了个名字但本质相同** = 重复（如"AI声音克隆"和"AI语音合成"）  
-- **同一目标用户的同类解决方案** = 重复（如"老年人健康监测"和"银发族智能健康管家"）
-- **仅细分方向不同但核心技术和商业模式相同** = 重复
-
-如果候选话题与任何已有项目存在语义重复，**直接排除，不要选它**。
-宁可本轮一个都不选，也不要选出与已有项目重复的话题。
-
-## 精选原则（在去重基础上）
-1. 优先选择**具体的、可落地的**创业方向
-2. 优先选择**有市场验证信号**的（高热度、多讨论、有融资新闻）
-3. 话题间要有**多样性**（彼此之间也不能相似）
-4. 如果原始话题不够具体，请**重新提炼**为更具体的创业方向
-5. **严格过滤**不满足约束条件的话题
-6. 数量：宁缺毋滥，通常精选 1-2 个，质量极高时最多 3 个
-
-## 输出格式（严格JSON数组，不要其他文字）
-[{"topic": "精选的具体创业方向", "reason": "选择理由（必须说明与已有项目的差异点）", "source_index": 0}]
-
-如果本批候选全部与已有项目重复或质量不够，输出空数组 []。
-source_index 是来源话题在输入列表中的索引号，如果是你重新提炼的话题就填 -1。`
-
 	prompt := fmt.Sprintf("以下是从多个渠道发现的 %d 个话题候选：\n\n%s%s%s", len(inputs), string(inputJSON), constraintStr, existingStr)
 
-	response, err := uc.llmClient.CallWithRole(ctx, "utility", selectorPrompt, []llm.Message{
+	response, err := uc.callAgent(ctx, "topic_strategist", llm.AgentTopicStrategist, []llm.Message{
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {

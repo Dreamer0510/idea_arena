@@ -207,7 +207,7 @@ func main() {
 	// 将 ProviderManager 注入 DebateUsecase（通过适配器）
 	debateUc.SetProviderManager(providerManager, &agentConfigRepoAdapter{repo: agentRepo}, &providerRepoAdapter{repo: providerRepo})
 	// 将 ProviderManager 注入 DiscoveryUsecase（用于关键词插件 AI 扩展）
-	discoveryUc.SetProviderManager(providerManager, &providerRepoAdapter{repo: providerRepo})
+	discoveryUc.SetProviderManager(providerManager, &providerRepoAdapter{repo: providerRepo}, &agentConfigRepoAdapter{repo: agentRepo})
 
 	// 注册爬虫插件（9个渠道：吾爱破解 + 关键词搜索 + 搜索热点趋势 + 社交痛点 + 学术前沿 + 融资信号 + 政策信号 + 需求信号 + LLM创意生成）
 	discoveryUc.RegisterPlugin(crawler.NewPojie52Plugin(logger))
