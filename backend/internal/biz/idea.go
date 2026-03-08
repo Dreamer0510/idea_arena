@@ -62,6 +62,25 @@ type IdeaRepo interface {
 	UpdateDebateLog(ctx context.Context, id int64, debateLog string, roundCount int) error
 	GetPending(ctx context.Context, limit int) ([]*Idea, error)
 	CountByStatus(ctx context.Context, status string) (int64, error)
+	GetStats(ctx context.Context) (*IdeaStats, error)
+}
+
+// IdeaStats 聚合统计数据
+type IdeaStats struct {
+	Total          int64              `json:"total"`
+	StatusCounts   map[string]int64   `json:"status_counts"`
+	AvgScores      map[string]float64 `json:"avg_scores"`
+	TotalRounds    int64              `json:"total_rounds"`
+	ScoreBuckets   map[string]int64   `json:"score_buckets"`
+	VoteStats      *VoteStats         `json:"vote_stats"`
+}
+
+// VoteStats 投票统计
+type VoteStats struct {
+	TotalVoted  int64   `json:"total_voted"`
+	YesRate     float64 `json:"yes_rate"`
+	NoRate      float64 `json:"no_rate"`
+	CondRate    float64 `json:"cond_rate"`
 }
 
 // IdeaUsecase Idea 业务用例
@@ -114,4 +133,9 @@ func (uc *IdeaUsecase) Update(ctx context.Context, idea *Idea) error {
 // Delete 删除 Idea
 func (uc *IdeaUsecase) Delete(ctx context.Context, id int64) error {
 	return uc.repo.Delete(ctx, id)
+}
+
+// GetStats 获取聚合统计
+func (uc *IdeaUsecase) GetStats(ctx context.Context) (*IdeaStats, error) {
+	return uc.repo.GetStats(ctx)
 }

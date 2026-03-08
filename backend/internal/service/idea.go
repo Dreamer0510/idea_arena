@@ -27,6 +27,7 @@ func NewIdeaService(uc *biz.IdeaUsecase, logger log.Logger) *IdeaService {
 // RegisterHTTPRoutes 注册 HTTP 路由
 func (s *IdeaService) RegisterHTTPRoutes(r *kratoshttp.Router) {
 	r.GET("/api/v1/ideas", s.ListIdeas)
+	r.GET("/api/v1/ideas/stats", s.GetStats)
 	r.GET("/api/v1/ideas/{id}", s.GetIdea)
 	r.POST("/api/v1/ideas", s.CreateIdea)
 	r.PUT("/api/v1/ideas/{id}", s.UpdateIdea)
@@ -225,4 +226,13 @@ func toIdeaDetailResponse(idea *biz.Idea) *ideaDetailResponse {
 		JudgeRefined:     idea.JudgeRefined,
 		VoteResult:       idea.VoteResult,
 	}
+}
+
+// GetStats 获取聚合统计数据
+func (s *IdeaService) GetStats(ctx kratoshttp.Context) error {
+	stats, err := s.uc.GetStats(ctx)
+	if err != nil {
+		return writeJSON(ctx, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return writeJSON(ctx, http.StatusOK, stats)
 }

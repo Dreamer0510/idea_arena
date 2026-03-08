@@ -43,6 +43,22 @@ export interface VoteResultData {
   cond_count: number;
 }
 
+export interface VoteStatsData {
+  total_voted: number;
+  yes_rate: number;
+  no_rate: number;
+  cond_rate: number;
+}
+
+export interface IdeaStats {
+  total: number;
+  status_counts: Record<string, number>;
+  avg_scores: Record<string, number>;
+  total_rounds: number;
+  score_buckets: Record<string, number>;
+  vote_stats: VoteStatsData | null;
+}
+
 export interface ListIdeasResponse {
   items: IdeaInfo[];
   total: number;

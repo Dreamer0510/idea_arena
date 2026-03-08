@@ -32,7 +32,7 @@ func NewHTTPServer(
 		"/api/v1/auth/login",
 		"/healthz",
 		"/api/v1/registry",
-		"/api/v1/ideas",          // GET 列表和详情不需要认证
+		"/api/v1/ideas",          // GET 列表、详情、统计不需要认证
 		"/api/v1/debate/status",  // SSE 状态推送不需要认证
 		"/api/v1/debate",         // SSE stream 不需要认证
 	}

@@ -7,7 +7,7 @@ import {
   ArrowLeft, MessageSquare, Code, FileText, Sparkles,
   Clock, Play, Loader2, Wifi, ChevronDown, ChevronUp,
   Lightbulb, Target, Swords, Users, Copy, Check,
-  UserPen, X, Send
+  UserPen, X, Send, Search, Vote, CheckCircle2, CircleDot
 } from "lucide-react";
 import { motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
@@ -222,6 +222,18 @@ export default function IdeaDetailPage() {
           </div>
         )}
       </motion.div>
+
+      {/* ═══ Decision Timeline ═══ */}
+      {!showStartButton && (
+        <DecisionTimeline
+          hasSearch={!!idea.search_data}
+          roundCount={idea.round_count}
+          hasJudge={!!idea.final_report}
+          voteVerdict={voteResult?.final_verdict || null}
+          finalStatus={idea.status}
+          score={idea.score_overall}
+        />
+      )}
 
       {/* ═══ Score Rings ═══ */}
       {hasScores && (
@@ -560,6 +572,137 @@ function MiniScore({ label, value, highlight }: { label: string; value: number; 
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`text-lg font-bold ${sc.text}`}>{value.toFixed(1)}</div>
     </div>
+  );
+}
+
+/* ───────── Decision Timeline ───────── */
+function DecisionTimeline({ hasSearch, roundCount, hasJudge, voteVerdict, finalStatus, score }: {
+  hasSearch: boolean; roundCount: number; hasJudge: boolean;
+  voteVerdict: string | null; finalStatus: string; score: number;
+}) {
+  const isDebating = finalStatus === "debating";
+
+  const steps = [
+    {
+      label: "选题",
+      icon: <Lightbulb className="w-4 h-4" />,
+      done: true,
+      detail: "话题已提交",
+      color: "text-sky-500",
+      bg: "bg-sky-500",
+    },
+    {
+      label: "搜索",
+      icon: <Search className="w-4 h-4" />,
+      done: hasSearch,
+      detail: hasSearch ? "真实数据采集完成" : (isDebating ? "搜索中..." : "未搜索"),
+      color: "text-cyan-500",
+      bg: "bg-cyan-500",
+    },
+    {
+      label: "辩论",
+      icon: <Swords className="w-4 h-4" />,
+      done: roundCount > 0,
+      detail: roundCount > 0 ? `${roundCount} 轮深度对局` : (isDebating ? "辩论进行中..." : "未开始"),
+      color: "text-violet-500",
+      bg: "bg-violet-500",
+    },
+    {
+      label: "仲裁",
+      icon: <Target className="w-4 h-4" />,
+      done: hasJudge,
+      detail: hasJudge ? "可行性报告已生成" : (isDebating ? "等待仲裁..." : "未仲裁"),
+      color: "text-indigo-500",
+      bg: "bg-indigo-500",
+    },
+    {
+      label: "投票",
+      icon: <Vote className="w-4 h-4" />,
+      done: !!voteVerdict,
+      detail: voteVerdict
+        ? `多模型判定: ${voteVerdict === "YES" ? "可行" : voteVerdict === "NO" ? "不可行" : "有条件可行"}`
+        : (isDebating ? "等待投票..." : "未投票"),
+      color: "text-purple-500",
+      bg: "bg-purple-500",
+    },
+    {
+      label: "结论",
+      icon: <CheckCircle2 className="w-4 h-4" />,
+      done: ["graduated", "promising", "failed"].includes(finalStatus),
+      detail: finalStatus === "graduated" ? `✅ 可行 (${score.toFixed(1)}分)`
+        : finalStatus === "promising" ? `🔶 有潜力 (${score.toFixed(1)}分)`
+        : finalStatus === "failed" ? `❌ 不可行 (${score.toFixed(1)}分)`
+        : (isDebating ? "等待结论..." : "待评估"),
+      color: finalStatus === "graduated" ? "text-green-500"
+        : finalStatus === "promising" ? "text-amber-500"
+        : finalStatus === "failed" ? "text-red-500" : "text-muted-foreground",
+      bg: finalStatus === "graduated" ? "bg-green-500"
+        : finalStatus === "promising" ? "bg-amber-500"
+        : finalStatus === "failed" ? "bg-red-500" : "bg-muted-foreground",
+    },
+  ];
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.5 }}>
+      <div className="rounded-2xl border bg-card p-6 md:p-8">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center">
+            <CircleDot className="w-4 h-4 text-primary" />
+          </div>
+          <h2 className="text-base font-bold tracking-tight">决策流程</h2>
+        </div>
+
+        {/* Desktop: horizontal */}
+        <div className="hidden md:flex items-start gap-0">
+          {steps.map((step, i) => (
+            <div key={step.label} className="flex-1 flex flex-col items-center text-center relative">
+              {/* Connector line */}
+              {i > 0 && (
+                <div className={`absolute top-4 right-1/2 w-full h-0.5 -translate-y-1/2 ${step.done ? "bg-primary/40" : "bg-border"}`} />
+              )}
+              {/* Circle */}
+              <div className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all ${
+                step.done ? `${step.bg} text-white border-transparent` : isDebating && !step.done && (i === 0 || steps[i-1].done) ? "border-primary/50 text-primary bg-primary/10 animate-pulse" : "border-border text-muted-foreground bg-card"
+              }`}>
+                {step.done ? <Check className="w-3.5 h-3.5" /> : step.icon}
+              </div>
+              {/* Label */}
+              <div className={`mt-2 text-xs font-bold ${step.done ? step.color : "text-muted-foreground"}`}>
+                {step.label}
+              </div>
+              {/* Detail */}
+              <div className="mt-1 text-[10px] text-muted-foreground leading-tight max-w-[100px]">
+                {step.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Mobile: vertical */}
+        <div className="md:hidden space-y-0">
+          {steps.map((step, i) => (
+            <div key={step.label} className="flex gap-3 items-start relative">
+              {/* Vertical line */}
+              <div className="flex flex-col items-center">
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center border-2 shrink-0 ${
+                  step.done ? `${step.bg} text-white border-transparent` : isDebating && !step.done && (i === 0 || steps[i-1].done) ? "border-primary/50 text-primary bg-primary/10 animate-pulse" : "border-border text-muted-foreground bg-card"
+                }`}>
+                  {step.done ? <Check className="w-3 h-3" /> : step.icon}
+                </div>
+                {i < steps.length - 1 && (
+                  <div className={`w-0.5 h-6 ${steps[i+1].done ? "bg-primary/40" : "bg-border"}`} />
+                )}
+              </div>
+              {/* Text */}
+              <div className="pb-4">
+                <div className={`text-xs font-bold ${step.done ? step.color : "text-muted-foreground"}`}>{step.label}</div>
+                <div className="text-[10px] text-muted-foreground">{step.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 

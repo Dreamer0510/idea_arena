@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import {
   Activity, TrendingUp, Trophy, Zap, BarChart3, Clock,
-  CheckCircle2, XCircle, Loader2, Swords, Target, ArrowUpRight
+  CheckCircle2, XCircle, Loader2, Swords, Target, ArrowUpRight, Vote
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
@@ -12,7 +12,7 @@ import {
   PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line,
   Legend
 } from "recharts";
-import { useIdeas } from "@/hooks/use-ideas";
+import { useIdeas, useIdeaStats } from "@/hooks/use-ideas";
 import type { IdeaInfo } from "@/types/api";
 import { VerdictBadge } from "@/components/ideas/badges";
 
@@ -64,27 +64,21 @@ const CHART_THEME = {
 
 /* ───────── Main Page ───────── */
 export default function MonitorPage() {
-  const { data, isLoading } = useIdeas({ page: 1, page_size: 200, sort_by: "created_at", sort_order: "desc" });
+  const { data: statsData, isLoading: statsLoading } = useIdeaStats();
+  const { data: recentData } = useIdeas({ page: 1, page_size: 10, sort_by: "created_at", sort_order: "desc" });
 
   const stats = useMemo(() => {
-    const items = data?.items || [];
-    const total = items.length;
+    if (!statsData) return null;
+    const sc = statsData.status_counts || {};
+    const statusCounts: Record<string, number> = {
+      graduated: sc.graduated || 0,
+      promising: sc.promising || 0,
+      failed: sc.failed || 0,
+      debating: sc.debating || 0,
+      pending: sc.pending || 0,
+    };
 
-    // Status counts
-    const statusCounts: Record<string, number> = { graduated: 0, promising: 0, failed: 0, debating: 0, pending: 0 };
-    items.forEach(i => { statusCounts[i.status] = (statusCounts[i.status] || 0) + 1; });
-
-    // Avg score (only scored items)
-    const scored = items.filter(i => i.score_overall > 0);
-    const avgScore = scored.length > 0 ? scored.reduce((s, i) => s + i.score_overall, 0) / scored.length : 0;
-    const avgFeasibility = scored.length > 0 ? scored.reduce((s, i) => s + i.score_feasibility, 0) / scored.length : 0;
-    const avgEconomics = scored.length > 0 ? scored.reduce((s, i) => s + i.score_economics, 0) / scored.length : 0;
-    const avgProfit = scored.length > 0 ? scored.reduce((s, i) => s + i.score_profit, 0) / scored.length : 0;
-
-    // Total rounds
-    const totalRounds = items.reduce((s, i) => s + i.round_count, 0);
-
-    // Graduation rate
+    const avgScores = statsData.avg_scores || {};
     const completed = statusCounts.graduated + statusCounts.promising + statusCounts.failed;
     const graduationRate = completed > 0 ? ((statusCounts.graduated + statusCounts.promising) / completed * 100) : 0;
 
@@ -93,42 +87,41 @@ export default function MonitorPage() {
       .filter(([, v]) => v > 0)
       .map(([k, v]) => ({ name: STATUS_LABELS[k] || k, value: v, fill: STATUS_COLORS[k] || "#666" }));
 
-    // Score distribution (histogram)
+    // Score distribution from backend
+    const bucketMap = statsData.score_buckets || {};
     const scoreBuckets = [
-      { range: "0-2", count: 0 }, { range: "2-4", count: 0 },
-      { range: "4-6", count: 0 }, { range: "6-8", count: 0 },
-      { range: "8-10", count: 0 },
+      { range: "0-2", count: bucketMap["0-2"] || 0 },
+      { range: "2-4", count: bucketMap["2-4"] || 0 },
+      { range: "4-6", count: bucketMap["4-6"] || 0 },
+      { range: "6-8", count: bucketMap["6-8"] || 0 },
+      { range: "8-10", count: bucketMap["8-10"] || 0 },
     ];
-    scored.forEach(i => {
-      const idx = Math.min(Math.floor(i.score_overall / 2), 4);
-      scoreBuckets[idx].count++;
-    });
 
     // Score dimensions bar chart
     const dimensionData = [
-      { dim: "可行性", avg: Number(avgFeasibility.toFixed(1)) },
-      { dim: "经济性", avg: Number(avgEconomics.toFixed(1)) },
-      { dim: "利润潜力", avg: Number(avgProfit.toFixed(1)) },
-      { dim: "综合", avg: Number(avgScore.toFixed(1)) },
+      { dim: "可行性", avg: Number((avgScores.feasibility || 0).toFixed(1)) },
+      { dim: "经济性", avg: Number((avgScores.economics || 0).toFixed(1)) },
+      { dim: "利润潜力", avg: Number((avgScores.profit || 0).toFixed(1)) },
+      { dim: "综合", avg: Number((avgScores.overall || 0).toFixed(1)) },
     ];
 
-    // Recent items (last 10)
-    const recent = items.slice(0, 10);
+    const recent = recentData?.items || [];
 
-    // Tag distribution (top 8)
-    const tagMap = new Map<string, number>();
-    items.forEach(i => {
-      if (i.tags) i.tags.forEach(t => tagMap.set(t, (tagMap.get(t) || 0) + 1));
-    });
-    const topTags = Array.from(tagMap.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([tag, count]) => ({ tag, count }));
+    return {
+      total: statsData.total,
+      statusCounts,
+      avgScore: avgScores.overall || 0,
+      totalRounds: statsData.total_rounds,
+      graduationRate,
+      pieData,
+      scoreBuckets,
+      dimensionData,
+      recent,
+      voteStats: statsData.vote_stats,
+    };
+  }, [statsData, recentData?.items]);
 
-    return { total, statusCounts, avgScore, totalRounds, graduationRate, pieData, scoreBuckets, dimensionData, recent, topTags, scored: scored.length };
-  }, [data?.items]);
-
-  if (isLoading) {
+  if (statsLoading || !stats) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -152,7 +145,7 @@ export default function MonitorPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <KPICard title="总点子数" value={stats.total} icon={<Zap className="w-5 h-5 text-white" />} color="bg-primary" delay={0} />
-        <KPICard title="平均得分" value={stats.avgScore.toFixed(1)} sub={`${stats.scored} 个已评分`} icon={<Trophy className="w-5 h-5 text-white" />} color="bg-amber-500" delay={0.05} />
+        <KPICard title="平均得分" value={stats.avgScore.toFixed(1)} icon={<Trophy className="w-5 h-5 text-white" />} color="bg-amber-500" delay={0.05} />
         <KPICard title="总辩论轮次" value={stats.totalRounds} icon={<Swords className="w-5 h-5 text-white" />} color="bg-violet-500" delay={0.1} />
         <KPICard title="通过率" value={`${stats.graduationRate.toFixed(0)}%`} sub={`${stats.statusCounts.graduated + stats.statusCounts.promising} / ${stats.statusCounts.graduated + stats.statusCounts.promising + stats.statusCounts.failed}`} icon={<CheckCircle2 className="w-5 h-5 text-white" />} color="bg-green-500" delay={0.15} />
         <KPICard title="辩论中" value={stats.statusCounts.debating} icon={<Activity className="w-5 h-5 text-white" />} color="bg-blue-500" delay={0.2} />
@@ -227,34 +220,43 @@ export default function MonitorPage() {
           </div>
         </motion.div>
 
-        {/* Top Tags */}
+        {/* Voting Stats */}
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
           className="rounded-2xl border bg-card p-6">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-4">热门标签</h3>
-          {stats.topTags.length > 0 ? (
-            <div className="space-y-3">
-              {stats.topTags.map((t, i) => {
-                const maxCount = stats.topTags[0].count;
-                const pct = maxCount > 0 ? (t.count / maxCount) * 100 : 0;
-                return (
-                  <div key={t.tag} className="space-y-1">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-4">投票统计</h3>
+          {stats.voteStats && stats.voteStats.total_voted > 0 ? (
+            <div className="space-y-6">
+              <div className="text-center">
+                <div className="text-4xl font-black font-mono">{stats.voteStats.total_voted}</div>
+                <div className="text-xs text-muted-foreground mt-1">已投票点子</div>
+              </div>
+              <div className="space-y-3">
+                {[
+                  { label: "可行 (YES)", rate: stats.voteStats.yes_rate, color: "bg-green-500" },
+                  { label: "不可行 (NO)", rate: stats.voteStats.no_rate, color: "bg-red-500" },
+                  { label: "有条件 (COND)", rate: stats.voteStats.cond_rate, color: "bg-amber-500" },
+                ].map(item => (
+                  <div key={item.label} className="space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">{t.tag}</span>
-                      <span className="text-muted-foreground font-mono text-xs">{t.count}</span>
+                      <span className="font-medium">{item.label}</span>
+                      <span className="text-muted-foreground font-mono text-xs">{item.rate.toFixed(1)}%</span>
                     </div>
-                    <div className="h-2 rounded-full bg-muted overflow-hidden">
+                    <div className="h-2.5 rounded-full bg-muted overflow-hidden">
                       <motion.div
-                        initial={{ width: 0 }} animate={{ width: `${pct}%` }}
-                        transition={{ delay: 0.3 + i * 0.05, duration: 0.6 }}
-                        className="h-full rounded-full bg-primary"
+                        initial={{ width: 0 }} animate={{ width: `${item.rate}%` }}
+                        transition={{ delay: 0.4, duration: 0.8 }}
+                        className={`h-full rounded-full ${item.color}`}
                       />
                     </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">暂无标签数据</div>
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground text-sm gap-2">
+              <Vote className="w-8 h-8 opacity-30" />
+              暂无投票数据
+            </div>
           )}
         </motion.div>
       </div>

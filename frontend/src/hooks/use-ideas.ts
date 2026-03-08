@@ -1,6 +1,6 @@
 import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import apiClient from "@/lib/api-client";
-import type { ListIdeasResponse, ListIdeasParams, IdeaDetail } from "@/types/api";
+import type { ListIdeasResponse, ListIdeasParams, IdeaDetail, IdeaStats } from "@/types/api";
 
 export function useIdeas(params: ListIdeasParams = {}) {
   return useQuery<ListIdeasResponse>({
@@ -29,6 +29,17 @@ export function useInfiniteIdeas(params: Omit<ListIdeasParams, "page"> & { page_
     },
     staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
+  });
+}
+
+export function useIdeaStats() {
+  return useQuery<IdeaStats>({
+    queryKey: ["idea-stats"],
+    queryFn: async () => {
+      const res = await apiClient.get("/api/v1/ideas/stats");
+      return res.data;
+    },
+    staleTime: 30 * 1000,
   });
 }
 
