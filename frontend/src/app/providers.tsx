@@ -23,7 +23,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, [hydrate]);
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
       <QueryClientProvider client={queryClient}>
         <ToastProvider>{children}</ToastProvider>
       </QueryClientProvider>
