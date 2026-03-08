@@ -144,7 +144,7 @@ function TopicsPanel() {
     arxiv_api: "arXiv API", hf_daily_papers: "HF每日论文", paperswithcode: "PapersWithCode",
     "36kr_rss": "36氪", "36kr_newsflash": "36氪快讯", techcrunch_rss: "TechCrunch", crunchbase_news: "Crunchbase News",
     people_politics: "人民网时政", people_it: "人民网IT", regulatory_review: "RegReview监管",
-    linkedin_demand: "LinkedIn需求", zhaopin_demand: "招聘需求", g2_review_demand: "G2评论需求",
+    producthunt: "ProductHunt", hn_demand: "HN需求", devto: "Dev.to",
     llm_creative: "AI创意", collision: "跨域碰撞",
   };
 

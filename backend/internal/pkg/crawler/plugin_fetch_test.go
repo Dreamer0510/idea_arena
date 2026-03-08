@@ -319,23 +319,79 @@ func TestPolicyRegulatoryReview(t *testing.T) {
 	}
 }
 
-// TestDemandSignalPluginFetch 测试 demand_signal 插件能否获取数据
+// TestDemandSignalPluginFetch 测试 demand_signal 完整 Fetch
 func TestDemandSignalPluginFetch(t *testing.T) {
 	p := NewDemandSignalPlugin(log.DefaultLogger, noConstraints)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	topics, err := p.Fetch(ctx, 5)
+	topics, err := p.Fetch(ctx, 15)
 	if err != nil {
 		t.Fatalf("Fetch error: %v", err)
 	}
 
-	t.Logf("[DemandSignal] got %d topics", len(topics))
+	sourceCounts := make(map[string]int)
+	for _, topic := range topics {
+		sourceCounts[topic.Source]++
+	}
+	t.Logf("[DemandSignal] total: %d topics", len(topics))
+	for src, cnt := range sourceCounts {
+		t.Logf("  source=%s count=%d", src, cnt)
+	}
+	t.Log("--- 详细列表 ---")
 	for i, topic := range topics {
-		t.Logf("  #%d source=%s title=%q url=%s", i+1, topic.Source, topic.Title, topic.URL)
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
 	}
 
 	if len(topics) == 0 {
-		t.Error("[DemandSignal] returned 0 topics — both Bing HTML and RSS failed")
+		t.Error("[DemandSignal] returned 0 topics")
+	}
+}
+
+// TestDemandProductHunt 单独测试 Product Hunt
+func TestDemandProductHunt(t *testing.T) {
+	p := NewDemandSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchProductHunt(ctx, 5)
+	t.Logf("[ProductHunt] got %d products", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[ProductHunt] returned 0 products")
+	}
+}
+
+// TestDemandHN 单独测试 HN 需求讨论
+func TestDemandHN(t *testing.T) {
+	p := NewDemandSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchHNDemand(ctx, 5)
+	t.Logf("[HN Demand] got %d stories", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[HN Demand] returned 0 stories")
+	}
+}
+
+// TestDemandDevTo 单独测试 Dev.to RSS
+func TestDemandDevTo(t *testing.T) {
+	p := NewDemandSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchDevToRSS(ctx, 5)
+	t.Logf("[Dev.to] got %d articles", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[Dev.to] returned 0 articles")
 	}
 }

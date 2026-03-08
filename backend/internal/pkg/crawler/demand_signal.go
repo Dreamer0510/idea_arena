@@ -2,9 +2,11 @@ package crawler
 
 import (
 	"context"
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/http"
-	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,12 +17,7 @@ import (
 
 var _ biz.CrawlerPluginInterface = (*DemandSignalPlugin)(nil)
 
-type demandSignalQuery struct {
-	query  string
-	source string
-}
-
-// DemandSignalPlugin 付费需求信号抓取（招聘/采购/评论）
+// DemandSignalPlugin 需求信号抓取（Product Hunt / HN 需求讨论 / Dev.to 开发者社区）
 type DemandSignalPlugin struct {
 	client         *http.Client
 	log            *log.Helper
@@ -29,7 +26,7 @@ type DemandSignalPlugin struct {
 
 func NewDemandSignalPlugin(logger log.Logger, getConstraints func() []string) *DemandSignalPlugin {
 	return &DemandSignalPlugin{
-		client:         newCrawlerHTTPClient(15 * time.Second),
+		client:         newCrawlerHTTPClient(20 * time.Second),
 		log:            log.NewHelper(logger),
 		getConstraints: getConstraints,
 	}
@@ -37,7 +34,7 @@ func NewDemandSignalPlugin(logger log.Logger, getConstraints func() []string) *D
 
 func (p *DemandSignalPlugin) Name() string { return "demand_signal" }
 func (p *DemandSignalPlugin) Label() string {
-	return "付费需求信号抓取（招聘/采购/评论）"
+	return "需求信号抓取（Product Hunt / HN需求 / Dev.to）"
 }
 
 func (p *DemandSignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopic, error) {
@@ -45,34 +42,21 @@ func (p *DemandSignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTo
 		limit = 10
 	}
 
-	queries := p.buildQueries()
-	if len(queries) == 0 {
-		return nil, nil
+	perSource := limit / 3
+	if perSource < 3 {
+		perSource = 3
 	}
 
-	perQuery := limit / len(queries)
-	if perQuery < 2 {
-		perQuery = 2
-	}
-
-	allTopics := make([]*biz.RawTopic, 0, limit)
 	seen := make(map[string]struct{})
+	allTopics := make([]*biz.RawTopic, 0, limit)
 
-	for _, q := range queries {
-		if len(allTopics) >= limit {
-			break
-		}
-
-		topics := p.searchBing(ctx, q.query, perQuery)
+	addTopics := func(topics []*biz.RawTopic) {
 		for _, t := range topics {
-			t.Source = q.source
-			t.Snippet = fmt.Sprintf("[需求信号] %s", truncateStr(t.Snippet, 220))
-			if t.Popularity == 0 {
-				t.Popularity = 160
+			if len(allTopics) >= limit {
+				break
 			}
-
-			key := strings.ToLower(strings.TrimSpace(t.Title)) + "|" + t.Source
-			if key == "|" {
+			key := strings.ToLower(strings.TrimSpace(t.Title))
+			if key == "" {
 				continue
 			}
 			if _, ok := seen[key]; ok {
@@ -80,66 +64,192 @@ func (p *DemandSignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTo
 			}
 			seen[key] = struct{}{}
 			allTopics = append(allTopics, t)
-			if len(allTopics) >= limit {
-				break
-			}
 		}
+	}
+
+	// 来源 1: Product Hunt Atom feed（新产品发布 = 市场需求信号）
+	addTopics(p.fetchProductHunt(ctx, perSource))
+
+	// 来源 2: HN Algolia（AI 需求/招聘相关热门讨论）
+	addTopics(p.fetchHNDemand(ctx, perSource))
+
+	// 来源 3: Dev.to RSS（开发者社区热门文章 = 技术需求信号）
+	if len(allTopics) < limit {
+		remaining := limit - len(allTopics)
+		addTopics(p.fetchDevToRSS(ctx, remaining))
 	}
 
 	p.log.Infof("[DemandSignal] Fetched %d demand topics", len(allTopics))
 	return allTopics, nil
 }
 
-func (p *DemandSignalPlugin) buildQueries() []demandSignalQuery {
-	constraintSuffix := ""
-	if p.getConstraints != nil {
-		constraints := p.getConstraints()
-		if len(constraints) > 0 {
-			if len(constraints) > 2 {
-				constraints = constraints[:2]
-			}
-			constraintSuffix = " " + strings.Join(constraints, " ")
-		}
-	}
+// ── 来源 1: Product Hunt Atom feed ──
 
-	return []demandSignalQuery{
-		{query: "site:linkedin.com AI product manager hiring workflow automation" + constraintSuffix, source: "linkedin_demand"},
-		{query: "site:zhaopin.com 人工智能 招聘 工具 效率" + constraintSuffix, source: "zhaopin_demand"},
-		{query: "site:g2.com AI software reviews pricing pain", source: "g2_review_demand"},
-	}
+// atomFeed Atom feed 解析结构
+type atomFeed struct {
+	XMLName xml.Name    `xml:"feed"`
+	Entries []atomEntry `xml:"entry"`
 }
 
-func (p *DemandSignalPlugin) searchBing(ctx context.Context, query string, limit int) []*biz.RawTopic {
-	searchURL := fmt.Sprintf("https://www.bing.com/search?q=%s&count=%d", url.QueryEscape(query), limit)
-	body, err := fetchHTMLWithRetry(ctx, p.client, searchURL, crawlerFetchOptions{
-		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
-		Referer:        "https://www.bing.com/",
+type atomEntry struct {
+	Title   string    `xml:"title"`
+	Links   []atomLink `xml:"link"`
+	Content string    `xml:"content"`
+}
+
+type atomLink struct {
+	Href string `xml:"href,attr"`
+	Rel  string `xml:"rel,attr"`
+}
+
+func (p *DemandSignalPlugin) fetchProductHunt(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "https://www.producthunt.com/feed", crawlerFetchOptions{
+		AcceptLanguage: "en-US,en;q=0.9",
+		Referer:        "https://www.producthunt.com/",
 		MaxRetries:     2,
-		DetectAntiBot:  true,
+		DetectAntiBot:  false,
 	})
 	if err != nil {
-		p.log.Warnf("[DemandSignal] Bing HTML error for '%s': %v, fallback to RSS", query, err)
-		return p.searchBingRSS(ctx, query, limit)
+		p.log.Warnf("[DemandSignal] Product Hunt Atom error: %v", err)
+		return nil
 	}
-	topics := parseBingToTopics(body, query, limit)
-	if len(topics) > 0 {
-		return topics
+
+	var feed atomFeed
+	if err := xml.Unmarshal([]byte(body), &feed); err != nil {
+		p.log.Warnf("[DemandSignal] Product Hunt Atom parse error: %v", err)
+		return nil
 	}
-	p.log.Warnf("[DemandSignal] Bing HTML got 0 for '%s', fallback to RSS", query)
-	return p.searchBingRSS(ctx, query, limit)
+
+	var topics []*biz.RawTopic
+	for i, entry := range feed.Entries {
+		if len(topics) >= limit {
+			break
+		}
+		title := strings.TrimSpace(entry.Title)
+		if title == "" {
+			continue
+		}
+
+		link := ""
+		for _, l := range entry.Links {
+			if l.Rel == "alternate" || l.Rel == "" {
+				link = l.Href
+				break
+			}
+		}
+		if link == "" && len(entry.Links) > 0 {
+			link = entry.Links[0].Href
+		}
+		if link == "" {
+			continue
+		}
+
+		desc := strings.TrimSpace(stripHTMLTags(entry.Content))
+		pop := max(50, 350-i*10)
+
+		snippet := fmt.Sprintf("[ProductHunt] %s", truncateStr(desc, 220))
+		if desc == "" {
+			snippet = fmt.Sprintf("[ProductHunt] %s", truncateStr(title, 220))
+		}
+
+		topics = append(topics, &biz.RawTopic{
+			Title:      title,
+			URL:        link,
+			Source:     "producthunt",
+			Popularity: pop,
+			Snippet:    snippet,
+		})
+	}
+
+	p.log.Infof("[DemandSignal] Product Hunt: %d products", len(topics))
+	return topics
 }
 
-func (p *DemandSignalPlugin) searchBingRSS(ctx context.Context, query string, limit int) []*biz.RawTopic {
-	rssURL := fmt.Sprintf("https://www.bing.com/search?q=%s&format=rss&count=%d", url.QueryEscape(query), limit)
-	body, err := fetchHTMLWithRetry(ctx, p.client, rssURL, crawlerFetchOptions{
-		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
-		Referer:        "https://www.bing.com/",
+// ── 来源 2: HN Algolia（AI 需求/招聘热门讨论）──
+
+func (p *DemandSignalPlugin) fetchHNDemand(ctx context.Context, limit int) []*biz.RawTopic {
+	apiURL := fmt.Sprintf(
+		"https://hn.algolia.com/api/v1/search?query=AI+startup+hiring+tool&tags=story&hitsPerPage=%d",
+		limit*2,
+	)
+
+	body, err := fetchHTMLWithRetry(ctx, p.client, apiURL, crawlerFetchOptions{
+		AcceptLanguage: "en-US,en;q=0.9",
 		MaxRetries:     1,
 		DetectAntiBot:  false,
 	})
 	if err != nil {
-		p.log.Warnf("[DemandSignal] Bing RSS error for '%s': %v", query, err)
+		p.log.Warnf("[DemandSignal] HN Algolia error: %v", err)
 		return nil
 	}
-	return parseBingRSSItemsToTopics(body, query, limit)
+
+	var resp struct {
+		Hits []struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			ObjectID    string `json:"objectID"`
+			Points      int    `json:"points"`
+			NumComments int    `json:"num_comments"`
+		} `json:"hits"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		p.log.Warnf("[DemandSignal] HN Algolia parse error: %v", err)
+		return nil
+	}
+
+	var topics []*biz.RawTopic
+	for _, hit := range resp.Hits {
+		if len(topics) >= limit {
+			break
+		}
+		title := strings.TrimSpace(hit.Title)
+		if title == "" {
+			continue
+		}
+
+		link := hit.URL
+		if link == "" {
+			link = fmt.Sprintf("https://news.ycombinator.com/item?id=%s", hit.ObjectID)
+		}
+
+		pop := hit.Points
+		if pop == 0 {
+			pop = 50
+		}
+
+		snippet := fmt.Sprintf("[HN需求] %d points, %d comments", hit.Points, hit.NumComments)
+
+		topics = append(topics, &biz.RawTopic{
+			Title:      title,
+			URL:        link,
+			Source:     "hn_demand",
+			Popularity: pop,
+			Snippet:    snippet,
+		})
+	}
+
+	p.log.Infof("[DemandSignal] HN Algolia demand: %d stories", len(topics))
+	return topics
+}
+
+// ── 来源 3: Dev.to RSS（开发者社区热门文章）──
+
+// devToDescRe 提取 Dev.to RSS description 中的文本
+var devToDescRe = regexp.MustCompile(`<[^>]*>`)
+
+func (p *DemandSignalPlugin) fetchDevToRSS(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "https://dev.to/feed", crawlerFetchOptions{
+		AcceptLanguage: "en-US,en;q=0.9",
+		Referer:        "https://dev.to/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[DemandSignal] Dev.to RSS error: %v", err)
+		return nil
+	}
+
+	topics := parseRSSToTopics(body, "devto", "Dev.to", limit)
+	p.log.Infof("[DemandSignal] Dev.to RSS: %d articles", len(topics))
+	return topics
 }
