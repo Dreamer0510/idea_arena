@@ -721,7 +721,16 @@ func (uc *DebateUsecase) runDebate(ctx context.Context, idea *Idea, eventCh chan
 
 	_ = uc.ideaRepo.UpdateScores(ctx, ideaID, lastScores[0], lastScores[1], lastScores[2], lastScores[3])
 
-	// ========== Step 6: 生成摘要 ==========
+	// ========== Step 6: 多模型投票 ==========
+	voteResult := uc.runVoting(ctx, topic, proposal, judgeResponse, lastScores, sendEvent)
+	var voteResultJSON string
+	if voteResult != nil {
+		if vj, err := json.Marshal(voteResult); err == nil {
+			voteResultJSON = string(vj)
+		}
+	}
+
+	// ========== Step 7: 生成摘要 ==========
 	sendEvent(DebateEvent{Type: "summary", Agent: llm.AgentDebateSummarizer.Emoji, Content: "生成辩论摘要..."})
 
 	summaryHistory := []llm.Message{
@@ -735,29 +744,57 @@ func (uc *DebateUsecase) runDebate(ctx context.Context, idea *Idea, eventCh chan
 
 	debateLog.Summary = summaryResponse
 
-	// ========== Step 7: 保存最终状态（三档：graduated / promising / failed）==========
+	// ========== Step 8: 保存最终状态（投票结果 + 分数综合判定）==========
 	var finalStatus string
-	switch {
-	case lastScores[3] >= graduationScore:
-		finalStatus = "graduated"
-	case lastScores[3] >= 5.5:
-		finalStatus = "promising"
-	default:
-		finalStatus = "failed"
+	if voteResult != nil {
+		switch voteResult.FinalVerdict {
+		case "YES":
+			finalStatus = "graduated"
+		case "NO":
+			if lastScores[3] >= 5.5 {
+				finalStatus = "promising"
+			} else {
+				finalStatus = "failed"
+			}
+		default: // CONDITIONAL
+			if lastScores[3] >= graduationScore {
+				finalStatus = "graduated"
+			} else if lastScores[3] >= 5.5 {
+				finalStatus = "promising"
+			} else {
+				finalStatus = "failed"
+			}
+		}
+	} else {
+		// 投票失败时回退到纯分数判定
+		switch {
+		case lastScores[3] >= graduationScore:
+			finalStatus = "graduated"
+		case lastScores[3] >= 5.5:
+			finalStatus = "promising"
+		default:
+			finalStatus = "failed"
+		}
 	}
 
 	logJSON, _ := json.Marshal(debateLog)
 	_ = uc.ideaRepo.Update(ctx, &Idea{
-		ID:        ideaID,
-		Status:    finalStatus,
-		DebateLog: string(logJSON),
+		ID:         ideaID,
+		Status:     finalStatus,
+		DebateLog:  string(logJSON),
+		VoteResult: voteResultJSON,
 	})
 
-	sendEvent(DebateEvent{Type: "done", Content: fmt.Sprintf("辩论完成！最终评分: %.1f, 状态: %s", lastScores[3], finalStatus),
+	voteVerdict := "N/A"
+	if voteResult != nil {
+		voteVerdict = voteResult.FinalVerdict
+	}
+	sendEvent(DebateEvent{Type: "done", Content: fmt.Sprintf("辩论完成！最终评分: %.1f, 投票: %s, 状态: %s", lastScores[3], voteVerdict, finalStatus),
 		Data: map[string]interface{}{
-			"status":      finalStatus,
-			"overall":     lastScores[3],
-			"round_count": len(debateLog.Rounds),
+			"status":       finalStatus,
+			"overall":      lastScores[3],
+			"round_count":  len(debateLog.Rounds),
+			"vote_verdict": voteVerdict,
 		}})
 
 	// 触发辩论完成回调（飞书通知等）
@@ -996,6 +1033,182 @@ func buildTodoSummaryForJudge(tl TodoList) string {
 		total, resolved, openP0, openP1, sb.String())
 
 	return summary
+}
+
+// ========== 多模型投票机制 ==========
+
+// VoteEntry 单个投票者的投票结果
+type VoteEntry struct {
+	Voter      string   `json:"voter"`
+	Model      string   `json:"model"`
+	Vote       string   `json:"vote"`       // YES, NO, CONDITIONAL
+	Confidence float64  `json:"confidence"`  // 0.0-1.0
+	KeyReason  string   `json:"key_reason"`
+	Risks      []string `json:"risks"`
+	Strengths  []string `json:"strengths"`
+}
+
+// VoteResult 完整投票结果
+type VoteResultData struct {
+	Votes       []VoteEntry `json:"votes"`
+	FinalVerdict string     `json:"final_verdict"` // YES, NO, CONDITIONAL
+	YesCount    int         `json:"yes_count"`
+	NoCount     int         `json:"no_count"`
+	CondCount   int         `json:"cond_count"`
+}
+
+// voterConfig 投票者配置
+type voterConfig struct {
+	AgentID string
+	Name    string
+	Model   string
+}
+
+const voteSystemPrompt = `你是一位创业项目评审专家，需要独立判断一个创业项目是否值得投入。
+
+## 评审要求
+- 基于提供的辩论过程和最终报告，独立给出你的判断
+- 不要被高分迷惑，关注实际可行性
+- 考虑中国市场环境
+- 评估AI技术的实际价值（vs 噱头）
+
+## 输出格式（严格JSON，不要多余文字）
+` + "```json" + `
+{
+  "vote": "YES|NO|CONDITIONAL",
+  "confidence": 0.8,
+  "key_reason": "一句话核心判断理由",
+  "risks": ["主要风险1", "主要风险2"],
+  "strengths": ["核心优势1", "核心优势2"]
+}
+` + "```" + `
+
+## vote 取值说明
+- YES: 方案成熟可执行，建议立即启动
+- NO: 存在根本性问题，不建议投入
+- CONDITIONAL: 有潜力但需要满足特定条件才可行`
+
+// runVoting 执行多模型投票
+func (uc *DebateUsecase) runVoting(ctx context.Context, topic, proposal, judgeReport string, scores [4]float64, sendEvent func(DebateEvent)) *VoteResultData {
+	voters := []voterConfig{
+		{AgentID: "voter_tech", Name: "技术评审", Model: "deepseek-v3.2"},
+		{AgentID: "voter_biz", Name: "商业评审", Model: "gpt-4o"},
+		{AgentID: "voter_overall", Name: "综合评审", Model: "claude-sonnet-4-6"},
+	}
+
+	sendEvent(DebateEvent{Type: "vote", Agent: "🗳️", Content: fmt.Sprintf("启动多模型投票评审（%d位评审员）...", len(voters))})
+
+	voteInput := fmt.Sprintf("## 项目信息\n**话题**: %s\n\n**最终方案摘要**:\n%s\n\n**辩论评分**: 可行性=%.1f 经济性=%.1f 利润潜力=%.1f 综合=%.1f\n\n**终极仲裁报告**:\n%s",
+		topic, truncateForVote(proposal, 2000), scores[0], scores[1], scores[2], scores[3], truncateForVote(judgeReport, 3000))
+
+	messages := []llm.Message{
+		{Role: "user", Content: voteInput},
+	}
+
+	type voteResult struct {
+		idx   int
+		entry VoteEntry
+		err   error
+	}
+
+	resultCh := make(chan voteResult, len(voters))
+
+	for i, voter := range voters {
+		go func(idx int, v voterConfig) {
+			entry := VoteEntry{Voter: v.Name, Model: v.Model}
+
+			var response string
+			var err error
+
+			// 尝试用 ProviderManager 直接调用指定模型
+			if uc.providerManager != nil {
+				opts := &llm.CallOptions{Temperature: 0.3}
+				response, err = uc.providerManager.CallWithProvider(ctx, 2, v.Model, voteSystemPrompt, messages, opts)
+			}
+			if err != nil || response == "" {
+				// 回退到默认 LLM client
+				response, err = uc.llmClient.CallWithRole(ctx, "utility", voteSystemPrompt, messages)
+			}
+
+			if err != nil {
+				resultCh <- voteResult{idx: idx, entry: entry, err: err}
+				return
+			}
+
+			// 解析投票 JSON
+			cleaned := cleanJSONBlock(response)
+			if parseErr := json.Unmarshal([]byte(cleaned), &entry); parseErr != nil {
+				uc.log.Warnf("[Vote] Failed to parse vote from %s: %v, raw: %s", v.Name, parseErr, truncateText(response, 200))
+				entry.Vote = "CONDITIONAL"
+				entry.KeyReason = "投票解析失败"
+				entry.Confidence = 0.3
+			}
+
+			entry.Voter = v.Name
+			entry.Model = v.Model
+			resultCh <- voteResult{idx: idx, entry: entry}
+		}(i, voter)
+	}
+
+	// 收集结果
+	result := &VoteResultData{
+		Votes: make([]VoteEntry, len(voters)),
+	}
+
+	for range voters {
+		vr := <-resultCh
+		if vr.err != nil {
+			uc.log.Warnf("[Vote] Voter %d failed: %v", vr.idx, vr.err)
+			result.Votes[vr.idx] = VoteEntry{
+				Voter:      voters[vr.idx].Name,
+				Model:      voters[vr.idx].Model,
+				Vote:       "CONDITIONAL",
+				Confidence: 0.1,
+				KeyReason:  fmt.Sprintf("投票失败: %v", vr.err),
+			}
+		} else {
+			result.Votes[vr.idx] = vr.entry
+		}
+	}
+
+	// 统计投票
+	for _, v := range result.Votes {
+		switch strings.ToUpper(v.Vote) {
+		case "YES":
+			result.YesCount++
+		case "NO":
+			result.NoCount++
+		default:
+			result.CondCount++
+		}
+
+		sendEvent(DebateEvent{Type: "vote", Agent: "🗳️",
+			Content: fmt.Sprintf("**%s** (%s): **%s** (置信度 %.0f%%)\n> %s", v.Voter, v.Model, v.Vote, v.Confidence*100, v.KeyReason)})
+	}
+
+	// 多数票决定
+	if result.YesCount > len(voters)/2 {
+		result.FinalVerdict = "YES"
+	} else if result.NoCount > len(voters)/2 {
+		result.FinalVerdict = "NO"
+	} else {
+		result.FinalVerdict = "CONDITIONAL"
+	}
+
+	sendEvent(DebateEvent{Type: "vote", Agent: "🗳️",
+		Content: fmt.Sprintf("📊 投票结果: YES=%d NO=%d CONDITIONAL=%d → **最终判定: %s**",
+			result.YesCount, result.NoCount, result.CondCount, result.FinalVerdict),
+		Data: result})
+
+	return result
+}
+
+// truncateForVote 截断文本用于投票输入
+func truncateForVote(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "\n... (已截断)"
 }
 
 // cleanJSONBlock 清理可能的 markdown 代码块包裹

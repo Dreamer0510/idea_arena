@@ -26,6 +26,7 @@ type IdeaModel struct {
 	OneLiner         string         `gorm:"type:varchar(500)" json:"one_liner"`
 	SearchData       string         `gorm:"type:longtext" json:"search_data"`
 	JudgeRefined     string         `gorm:"type:longtext" json:"judge_refined"`
+	VoteResult       string         `gorm:"type:longtext" json:"vote_result"`
 	CreatedAt        time.Time      `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt        time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`

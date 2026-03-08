@@ -65,6 +65,7 @@ type ideaDetailResponse struct {
 	DevPrompt    string `json:"dev_prompt"`
 	SearchData   string `json:"search_data"`
 	JudgeRefined string `json:"judge_refined"`
+	VoteResult   string `json:"vote_result"`
 }
 
 type createIdeaRequest struct {
@@ -222,5 +223,6 @@ func toIdeaDetailResponse(idea *biz.Idea) *ideaDetailResponse {
 		DevPrompt:        idea.DevPrompt,
 		SearchData:       idea.SearchData,
 		JudgeRefined:     idea.JudgeRefined,
+		VoteResult:       idea.VoteResult,
 	}
 }

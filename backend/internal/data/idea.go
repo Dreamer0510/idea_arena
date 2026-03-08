@@ -66,6 +66,9 @@ func (r *ideaRepo) Update(ctx context.Context, idea *biz.Idea) error {
 	if idea.JudgeRefined != "" {
 		updates["judge_refined"] = idea.JudgeRefined
 	}
+	if idea.VoteResult != "" {
+		updates["vote_result"] = idea.VoteResult
+	}
 	if idea.TechStack != "" {
 		updates["tech_stack"] = idea.TechStack
 	}
@@ -202,6 +205,7 @@ func toBizIdeaModel(idea *biz.Idea) *IdeaModel {
 		OneLiner:         idea.OneLiner,
 		SearchData:       idea.SearchData,
 		JudgeRefined:     idea.JudgeRefined,
+		VoteResult:       idea.VoteResult,
 	}
 }
 
@@ -229,6 +233,7 @@ func toIdeaBiz(m *IdeaModel) *biz.Idea {
 		OneLiner:         m.OneLiner,
 		SearchData:       m.SearchData,
 		JudgeRefined:     m.JudgeRefined,
+		VoteResult:       m.VoteResult,
 		CreatedAt:        m.CreatedAt,
 		UpdatedAt:        m.UpdatedAt,
 	}

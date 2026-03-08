@@ -27,6 +27,7 @@ type Idea struct {
 	OneLiner         string
 	SearchData       string
 	JudgeRefined     string
+	VoteResult       string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
