@@ -524,7 +524,7 @@ function PluginsPanel() {
       return next;
     });
     try {
-      const r = await apiClient.post(`/api/v1/admin/plugins/${p.name}/test`, { limit: 5 });
+      const r = await apiClient.post(`/api/v1/admin/plugins/${p.name}/test`, { limit: 10 });
       setTestResults((prev) => ({
         ...prev,
         [p.name]: {
@@ -666,17 +666,26 @@ function PluginsPanel() {
 
               {testResults[p.name] && (
                 <div className="px-4 pb-3 -mt-1 space-y-2">
-                  <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-                    测试结果：抓取到 <span className="font-semibold text-foreground">{testResults[p.name].count}</span> 条数据。
-                    <span className="ml-1">
-                      {p.name === "keyword_search"
-                        ? "以下为关键词插件并发抓取后，经过相关性匹配筛选得到的 Top 结果。"
-                        : "以下为插件原始抓取结果（未经过去重、评分和推荐筛选）。"}
+                  <div className="flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                    <span>
+                      测试结果：抓取到 <span className="font-semibold text-foreground">{testResults[p.name].count}</span> 条数据。
+                      <span className="ml-1">
+                        {p.name === "keyword_search"
+                          ? "以下为关键词插件并发抓取后，经过相关性匹配筛选得到的 Top 结果。"
+                          : "以下为插件原始抓取结果（未经过去重、评分和推荐筛选）。"}
+                      </span>
                     </span>
+                    <button
+                      onClick={() => setTestResults((prev) => { const next = { ...prev }; delete next[p.name]; return next; })}
+                      className="ml-2 shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                      title="关闭测试结果"
+                    >
+                      ✕
+                    </button>
                   </div>
 
                   {testResults[p.name].samples.length > 0 && (
-                    <div className="overflow-x-auto rounded-lg border bg-background">
+                    <div className="overflow-x-auto rounded-lg border bg-background max-h-[420px] overflow-y-auto">
                       <table className="w-full min-w-[860px] text-xs">
                         <thead>
                           <tr className="border-b bg-muted/40 text-left text-muted-foreground">
