@@ -217,7 +217,7 @@ func (p *SocialPainPlugin) fetchBaiduPain(ctx context.Context, limit int) []*biz
 		}
 	}
 
-	// 筛选 AI/科技 + 痛点相关话题
+	// 不限领域筛选：通用生活痛点同样有价值（后续由 AI 跨域分析判断是否有 AI 赋能可能性）
 	var topics []*biz.RawTopic
 	for _, item := range allItems {
 		if len(topics) >= limit {
@@ -227,11 +227,6 @@ func (p *SocialPainPlugin) fetchBaiduPain(ctx context.Context, limit int) []*biz
 		if title == "" {
 			continue
 		}
-		text := title + " " + item.Desc
-		if !isTechRelated(text) {
-			continue
-		}
-		// 优先取痛点相关，但科技话题也可接受（用户在社交平台讨论的科技话题本身有参考价值）
 		sourceURL := item.URL
 		if sourceURL == "" {
 			sourceURL = fmt.Sprintf("https://www.baidu.com/s?wd=%s", url.QueryEscape(title))
@@ -260,11 +255,11 @@ func (p *SocialPainPlugin) fetchBaiduPain(ctx context.Context, limit int) []*biz
 	}
 
 	if len(topics) == 0 {
-		p.log.Warnf("[SocialPain] Baidu hot got 0 AI/tech pain topics, fallback to Bing RSS")
-		return p.searchBingRSS(ctx, "AI 工具 痛点 吐槽 问题", limit)
+		p.log.Warnf("[SocialPain] Baidu hot got 0 topics, fallback to Bing RSS")
+		return p.searchBingRSS(ctx, "生活 痛点 吐槽 问题 体验差", limit)
 	}
 
-	p.log.Infof("[SocialPain] Baidu hot pain: %d topics", len(topics))
+	p.log.Infof("[SocialPain] Baidu hot: %d topics", len(topics))
 	return topics
 }
 

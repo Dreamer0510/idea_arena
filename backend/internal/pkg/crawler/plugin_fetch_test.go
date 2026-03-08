@@ -10,24 +10,81 @@ import (
 
 func noConstraints() []string { return nil }
 
-// TestSocialPainPluginFetch 测试 social_pain 插件能否获取数据
+// TestSocialPainPluginFetch 测试 social_pain 插件完整 Fetch（limit=30 展示全貌）
 func TestSocialPainPluginFetch(t *testing.T) {
 	p := NewSocialPainPlugin(log.DefaultLogger, noConstraints)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	topics, err := p.Fetch(ctx, 5)
+	topics, err := p.Fetch(ctx, 30)
 	if err != nil {
 		t.Fatalf("Fetch error: %v", err)
 	}
 
-	t.Logf("[SocialPain] got %d topics", len(topics))
+	// 按来源统计
+	sourceCounts := make(map[string]int)
+	for _, topic := range topics {
+		sourceCounts[topic.Source]++
+	}
+	t.Logf("[SocialPain] total: %d topics", len(topics))
+	for src, cnt := range sourceCounts {
+		t.Logf("  source=%s count=%d", src, cnt)
+	}
+	t.Log("--- 详细列表 ---")
 	for i, topic := range topics {
-		t.Logf("  #%d source=%s title=%q url=%s", i+1, topic.Source, topic.Title, topic.URL)
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
 	}
 
 	if len(topics) == 0 {
-		t.Error("[SocialPain] returned 0 topics — both Bing HTML and RSS failed")
+		t.Error("[SocialPain] returned 0 topics")
+	}
+}
+
+// TestSocialPainHNAlgolia 单独测试 HN Algolia 来源
+func TestSocialPainHNAlgolia(t *testing.T) {
+	p := NewSocialPainPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchHNPain(ctx, 10)
+	t.Logf("[HN Algolia] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[HN Algolia] returned 0 topics")
+	}
+}
+
+// TestSocialPainBaiduHot 单独测试百度热搜来源（不限领域）
+func TestSocialPainBaiduHot(t *testing.T) {
+	p := NewSocialPainPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchBaiduPain(ctx, 20)
+	t.Logf("[Baidu Hot] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q", i+1, topic.Popularity, topic.Title)
+	}
+	if len(topics) == 0 {
+		t.Error("[Baidu Hot] returned 0 topics")
+	}
+}
+
+// TestSocialPainXHSExplore 单独测试小红书 explore 来源
+func TestSocialPainXHSExplore(t *testing.T) {
+	p := NewSocialPainPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchXHSExplore(ctx, 30)
+	t.Logf("[XHS Explore] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s snippet=%s", i+1, topic.Popularity, topic.Title, topic.URL, topic.Snippet)
+	}
+	if len(topics) == 0 {
+		t.Error("[XHS Explore] returned 0 topics")
 	}
 }
 
