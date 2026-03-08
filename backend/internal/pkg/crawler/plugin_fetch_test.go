@@ -242,24 +242,80 @@ func TestFundingCrunchbase(t *testing.T) {
 	}
 }
 
-// TestPolicySignalPluginFetch 测试 policy_signal 插件能否获取数据
+// TestPolicySignalPluginFetch 测试 policy_signal 完整 Fetch
 func TestPolicySignalPluginFetch(t *testing.T) {
 	p := NewPolicySignalPlugin(log.DefaultLogger, noConstraints)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	topics, err := p.Fetch(ctx, 5)
+	topics, err := p.Fetch(ctx, 15)
 	if err != nil {
 		t.Fatalf("Fetch error: %v", err)
 	}
 
-	t.Logf("[PolicySignal] got %d topics", len(topics))
+	sourceCounts := make(map[string]int)
+	for _, topic := range topics {
+		sourceCounts[topic.Source]++
+	}
+	t.Logf("[PolicySignal] total: %d topics", len(topics))
+	for src, cnt := range sourceCounts {
+		t.Logf("  source=%s count=%d", src, cnt)
+	}
+	t.Log("--- 详细列表 ---")
 	for i, topic := range topics {
-		t.Logf("  #%d source=%s title=%q url=%s", i+1, topic.Source, topic.Title, topic.URL)
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
 	}
 
 	if len(topics) == 0 {
-		t.Error("[PolicySignal] returned 0 topics — both Bing HTML and RSS failed")
+		t.Error("[PolicySignal] returned 0 topics")
+	}
+}
+
+// TestPolicyPeoplePolitics 单独测试人民网时政
+func TestPolicyPeoplePolitics(t *testing.T) {
+	p := NewPolicySignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchPeoplePolitics(ctx, 5)
+	t.Logf("[人民网时政] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[人民网时政] returned 0 topics")
+	}
+}
+
+// TestPolicyPeopleIT 单独测试人民网IT
+func TestPolicyPeopleIT(t *testing.T) {
+	p := NewPolicySignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchPeopleIT(ctx, 5)
+	t.Logf("[人民网IT] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[人民网IT] returned 0 topics")
+	}
+}
+
+// TestPolicyRegulatoryReview 单独测试 The Regulatory Review
+func TestPolicyRegulatoryReview(t *testing.T) {
+	p := NewPolicySignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchRegulatoryReview(ctx, 5)
+	t.Logf("[RegReview] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[RegReview] returned 0 topics")
 	}
 }
 

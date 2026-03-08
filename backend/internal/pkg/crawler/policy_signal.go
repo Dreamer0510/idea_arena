@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -15,12 +14,7 @@ import (
 
 var _ biz.CrawlerPluginInterface = (*PolicySignalPlugin)(nil)
 
-type policySignalQuery struct {
-	query  string
-	source string
-}
-
-// PolicySignalPlugin 政策信号抓取（政府公告/专项资金/行业监管）
+// PolicySignalPlugin 政策信号抓取（人民网时政 / 人民网IT / The Regulatory Review）
 type PolicySignalPlugin struct {
 	client         *http.Client
 	log            *log.Helper
@@ -29,7 +23,7 @@ type PolicySignalPlugin struct {
 
 func NewPolicySignalPlugin(logger log.Logger, getConstraints func() []string) *PolicySignalPlugin {
 	return &PolicySignalPlugin{
-		client:         newCrawlerHTTPClient(15 * time.Second),
+		client:         newCrawlerHTTPClient(20 * time.Second),
 		log:            log.NewHelper(logger),
 		getConstraints: getConstraints,
 	}
@@ -37,7 +31,7 @@ func NewPolicySignalPlugin(logger log.Logger, getConstraints func() []string) *P
 
 func (p *PolicySignalPlugin) Name() string { return "policy_signal" }
 func (p *PolicySignalPlugin) Label() string {
-	return "政策信号抓取（政府公告/专项资金/监管动态）"
+	return "政策信号抓取（人民网时政 / 人民网IT / The Regulatory Review）"
 }
 
 func (p *PolicySignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTopic, error) {
@@ -45,34 +39,21 @@ func (p *PolicySignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTo
 		limit = 10
 	}
 
-	queries := p.buildQueries()
-	if len(queries) == 0 {
-		return nil, nil
+	perSource := limit / 3
+	if perSource < 3 {
+		perSource = 3
 	}
 
-	perQuery := limit / len(queries)
-	if perQuery < 2 {
-		perQuery = 2
-	}
-
-	allTopics := make([]*biz.RawTopic, 0, limit)
 	seen := make(map[string]struct{})
+	allTopics := make([]*biz.RawTopic, 0, limit)
 
-	for _, q := range queries {
-		if len(allTopics) >= limit {
-			break
-		}
-
-		topics := p.searchBing(ctx, q.query, perQuery)
+	addTopics := func(topics []*biz.RawTopic) {
 		for _, t := range topics {
-			t.Source = q.source
-			t.Snippet = fmt.Sprintf("[政策信号] %s", truncateStr(t.Snippet, 220))
-			if t.Popularity == 0 {
-				t.Popularity = 140
+			if len(allTopics) >= limit {
+				break
 			}
-
-			key := strings.ToLower(strings.TrimSpace(t.Title)) + "|" + t.Source
-			if key == "|" {
+			key := strings.ToLower(strings.TrimSpace(t.Title))
+			if key == "" {
 				continue
 			}
 			if _, ok := seen[key]; ok {
@@ -80,66 +61,84 @@ func (p *PolicySignalPlugin) Fetch(ctx context.Context, limit int) ([]*biz.RawTo
 			}
 			seen[key] = struct{}{}
 			allTopics = append(allTopics, t)
-			if len(allTopics) >= limit {
-				break
-			}
 		}
+	}
+
+	// 来源 1: 人民网时政频道 RSS（中文政策/时政新闻）
+	addTopics(p.fetchPeoplePolitics(ctx, perSource))
+
+	// 来源 2: 人民网 IT 频道 RSS（中文科技政策/产业动态）
+	addTopics(p.fetchPeopleIT(ctx, perSource))
+
+	// 来源 3: The Regulatory Review RSS（英文监管/政策分析）
+	if len(allTopics) < limit {
+		remaining := limit - len(allTopics)
+		addTopics(p.fetchRegulatoryReview(ctx, remaining))
 	}
 
 	p.log.Infof("[PolicySignal] Fetched %d policy topics", len(allTopics))
 	return allTopics, nil
 }
 
-func (p *PolicySignalPlugin) buildQueries() []policySignalQuery {
-	constraintSuffix := ""
-	if p.getConstraints != nil {
-		constraints := p.getConstraints()
-		if len(constraints) > 0 {
-			if len(constraints) > 2 {
-				constraints = constraints[:2]
-			}
-			constraintSuffix = " " + strings.Join(constraints, " ")
-		}
-	}
+// ── 来源 1: 人民网时政频道 RSS ──
 
-	return []policySignalQuery{
-		{query: "site:gov.cn 人工智能 政策 通知 专项" + constraintSuffix, source: "gov_policy"},
-		{query: "site:ndrc.gov.cn 人工智能 项目 资金 支持" + constraintSuffix, source: "ndrc_policy"},
-		{query: "site:miit.gov.cn 人工智能 监管 指南 试点", source: "miit_policy"},
-	}
-}
-
-func (p *PolicySignalPlugin) searchBing(ctx context.Context, query string, limit int) []*biz.RawTopic {
-	searchURL := fmt.Sprintf("https://www.bing.com/search?q=%s&count=%d", url.QueryEscape(query), limit)
-	body, err := fetchHTMLWithRetry(ctx, p.client, searchURL, crawlerFetchOptions{
-		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
-		Referer:        "https://www.bing.com/",
-		MaxRetries:     2,
-		DetectAntiBot:  true,
-	})
-	if err != nil {
-		p.log.Warnf("[PolicySignal] Bing HTML error for '%s': %v, fallback to RSS", query, err)
-		return p.searchBingRSS(ctx, query, limit)
-	}
-	topics := parseBingToTopics(body, query, limit)
-	if len(topics) > 0 {
-		return topics
-	}
-	p.log.Warnf("[PolicySignal] Bing HTML got 0 for '%s', fallback to RSS", query)
-	return p.searchBingRSS(ctx, query, limit)
-}
-
-func (p *PolicySignalPlugin) searchBingRSS(ctx context.Context, query string, limit int) []*biz.RawTopic {
-	rssURL := fmt.Sprintf("https://www.bing.com/search?q=%s&format=rss&count=%d", url.QueryEscape(query), limit)
-	body, err := fetchHTMLWithRetry(ctx, p.client, rssURL, crawlerFetchOptions{
-		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
-		Referer:        "https://www.bing.com/",
+func (p *PolicySignalPlugin) fetchPeoplePolitics(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "http://www.people.com.cn/rss/politics.xml", crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9",
+		Referer:        "http://politics.people.com.cn/",
 		MaxRetries:     1,
 		DetectAntiBot:  false,
 	})
 	if err != nil {
-		p.log.Warnf("[PolicySignal] Bing RSS error for '%s': %v", query, err)
+		p.log.Warnf("[PolicySignal] people.com.cn politics RSS error: %v", err)
 		return nil
 	}
-	return parseBingRSSItemsToTopics(body, query, limit)
+
+	topics := parseRSSToTopics(body, "people_politics", "人民网时政", limit)
+	p.log.Infof("[PolicySignal] people.com.cn politics RSS: %d items", len(topics))
+	return topics
+}
+
+// ── 来源 2: 人民网 IT 频道 RSS ──
+
+func (p *PolicySignalPlugin) fetchPeopleIT(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "http://www.people.com.cn/rss/it.xml", crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9",
+		Referer:        "http://it.people.com.cn/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[PolicySignal] people.com.cn IT RSS error: %v", err)
+		return nil
+	}
+
+	topics := parseRSSToTopics(body, "people_it", "人民网IT", limit)
+	p.log.Infof("[PolicySignal] people.com.cn IT RSS: %d items", len(topics))
+	return topics
+}
+
+// ── 来源 3: The Regulatory Review RSS（英文监管政策分析）──
+
+func (p *PolicySignalPlugin) fetchRegulatoryReview(ctx context.Context, limit int) []*biz.RawTopic {
+	body, err := fetchHTMLWithRetry(ctx, p.client, "https://www.theregreview.org/feed/", crawlerFetchOptions{
+		AcceptLanguage: "en-US,en;q=0.9",
+		Referer:        "https://www.theregreview.org/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[PolicySignal] The Regulatory Review RSS error: %v", err)
+		return nil
+	}
+
+	topics := parseRSSToTopics(body, "regulatory_review", "RegReview", limit)
+
+	// 调整 snippet 前缀
+	for _, t := range topics {
+		t.Snippet = fmt.Sprintf("[政策监管] %s", truncateStr(t.Snippet, 220))
+	}
+
+	p.log.Infof("[PolicySignal] The Regulatory Review RSS: %d items", len(topics))
+	return topics
 }

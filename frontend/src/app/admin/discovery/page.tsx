@@ -143,7 +143,7 @@ function TopicsPanel() {
     xiaohongshu_pain: "小红书痛点", zhihu_pain: "知乎痛点", reddit_pain: "Reddit痛点",
     arxiv_api: "arXiv API", hf_daily_papers: "HF每日论文", paperswithcode: "PapersWithCode",
     "36kr_rss": "36氪", "36kr_newsflash": "36氪快讯", techcrunch_rss: "TechCrunch", crunchbase_news: "Crunchbase News",
-    gov_policy: "Gov政策", ndrc_policy: "发改委政策", miit_policy: "工信部政策",
+    people_politics: "人民网时政", people_it: "人民网IT", regulatory_review: "RegReview监管",
     linkedin_demand: "LinkedIn需求", zhaopin_demand: "招聘需求", g2_review_demand: "G2评论需求",
     llm_creative: "AI创意", collision: "跨域碰撞",
   };
