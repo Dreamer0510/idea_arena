@@ -66,7 +66,7 @@ func (CrawlerPluginModel) TableName() string { return "crawler_plugins" }
 type DiscoveryTagModel struct {
 	ID        int64     `gorm:"primaryKey;autoIncrement"`
 	Tag       string    `gorm:"size:256;not null"`
-	Category  string    `gorm:"size:64;default:'constraint'"` // constraint=约束条件, trend_query_cn=中文趋势搜索词, trend_query_en=英文趋势搜索词
+	Category  string    `gorm:"size:64;default:'constraint'"` // constraint=约束条件
 	Enabled   bool      `gorm:"default:true"`
 	CreatedAt time.Time `gorm:"autoCreateTime"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`

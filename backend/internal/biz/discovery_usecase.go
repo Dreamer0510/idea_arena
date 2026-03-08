@@ -70,9 +70,9 @@ func (uc *DiscoveryUsecase) RegisterPlugin(p CrawlerPluginInterface) {
 	defer uc.pluginsMu.Unlock()
 	uc.plugins[p.Name()] = p
 
-	// 确保 DB 中有该插件记录
+	// 确保 DB 中有该插件记录，并同步最新 Label
 	ctx := context.Background()
-	_, err := uc.repo.GetPlugin(ctx, p.Name())
+	existing, err := uc.repo.GetPlugin(ctx, p.Name())
 	if err != nil {
 		_ = uc.repo.UpsertPlugin(ctx, &CrawlerPlugin{
 			Name:    p.Name(),
@@ -80,6 +80,9 @@ func (uc *DiscoveryUsecase) RegisterPlugin(p CrawlerPluginInterface) {
 			Enabled: false,
 			Config:  "{}",
 		})
+	} else if existing.Label != p.Label() {
+		existing.Label = p.Label()
+		_ = uc.repo.UpsertPlugin(ctx, existing)
 	}
 }
 

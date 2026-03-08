@@ -107,7 +107,7 @@ export interface CrawlerPlugin {
 export interface DiscoveryTag {
   id: number;
   tag: string;
-  category: string; // constraint, trend_query_cn, trend_query_en
+  category: string; // constraint
   enabled: boolean;
 }
 

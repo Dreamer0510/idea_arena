@@ -137,6 +137,7 @@ function TopicsPanel() {
 
   const sourceLabels: Record<string, string> = {
     "52pojie": "吾爱破解", bing_keyword: "Bing", baidu_keyword: "百度",
+    baidu_hot: "百度热搜", github_trending: "GitHub Trending", hackernews_top: "Hacker News",
     bing_trend: "Bing热点", bing_trend_en: "Bing(EN)", baidu_trend: "百度热点",
     xiaohongshu_pain: "小红书痛点", zhihu_pain: "知乎痛点", reddit_pain: "Reddit痛点",
     arxiv_frontier: "arXiv前沿", hf_papers_frontier: "HF Papers", paperswithcode_frontier: "PapersWithCode",
@@ -304,8 +305,6 @@ function TopicsPanel() {
 // ============================================================
 const CATEGORY_OPTIONS = [
   { value: "constraint", label: "约束条件", desc: "影响所有渠道的话题筛选", emoji: "🎯" },
-  { value: "trend_query_cn", label: "中文搜索词", desc: "热点趋势抓取使用的中文搜索关键词", emoji: "🔍" },
-  { value: "trend_query_en", label: "英文搜索词", desc: "热点趋势抓取使用的英文搜索关键词", emoji: "🌐" },
 ];
 
 function TagsPanel() {
@@ -656,6 +655,14 @@ function PluginsPanel() {
                 </div>
               )}
 
+              {testingPlugin === p.name && p.name === "trend_search" && (
+                <div className="px-4 pb-3 -mt-1">
+                  <div className="rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-800 dark:text-blue-200">
+                    正在并发抓取百度热搜、GitHub Trending、Hacker News 三个真实热点来源，可能需要数秒，请稍候。
+                  </div>
+                </div>
+              )}
+
               {testResults[p.name] && (
                 <div className="px-4 pb-3 -mt-1 space-y-2">
                   <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
@@ -715,7 +722,37 @@ function PluginsPanel() {
 
               {expanded[p.name] && (
                 <div className="border-t px-4 py-4 bg-background/50">
-                  {p.name === "keyword_search" ? (
+                  {p.name === "trend_search" ? (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-semibold">数据来源说明</h4>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        该插件从三个真实热点来源并发抓取，无需手动配置搜索词：
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <div className="rounded-lg border bg-card p-3">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-base">🔥</span>
+                            <span className="text-xs font-semibold">百度热搜</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">实时热搜 API，自动筛选 AI/科技相关话题。降级方案：Bing RSS。</p>
+                        </div>
+                        <div className="rounded-lg border bg-card p-3">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-base">🐙</span>
+                            <span className="text-xs font-semibold">GitHub Trending</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">每日热门仓库，直接解析 GitHub Trending 页面。降级方案：Bing RSS。</p>
+                        </div>
+                        <div className="rounded-lg border bg-card p-3">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-base">📰</span>
+                            <span className="text-xs font-semibold">Hacker News</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">Firebase 公开 API 获取热门科技文章。降级方案：Bing RSS。</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : p.name === "keyword_search" ? (
                     <div className="space-y-3">
                       <div className="rounded-lg border bg-card p-3 space-y-3">
                         <div className="flex items-center justify-between">

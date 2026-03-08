@@ -72,7 +72,7 @@ func DefaultSettings() *SystemSettings {
 type DiscoveryTag struct {
 	ID       int64  `json:"id"`
 	Tag      string `json:"tag"`
-	Category string `json:"category"` // constraint, trend_query_cn, trend_query_en
+	Category string `json:"category"` // constraint
 	Enabled  bool   `json:"enabled"`
 }
 
