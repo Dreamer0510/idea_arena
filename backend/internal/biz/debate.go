@@ -703,23 +703,23 @@ func (uc *DebateUsecase) runDebate(ctx context.Context, idea *Idea, eventCh chan
 	}
 	judgeResponse, err := uc.callAgent(ctx, "judge", llm.AgentJudge, judgeHistory)
 	if err != nil {
-		uc.handleError(ctx, ideaID, sendEvent, fmt.Errorf("judge failed: %w", err))
-		return
+		uc.log.Warnf("[Debate] Idea %d judge failed: %v, will determine status from debate scores", ideaID, err)
+		judgeResponse = fmt.Sprintf("⚠️ 终极仲裁生成失败（%v），以下结论基于辩论过程评分。", err)
+		sendEvent(DebateEvent{Type: "judge", Agent: llm.AgentJudge.Emoji, Content: judgeResponse})
+	} else {
+		// 从裁决报告中解析最终评分
+		finalScores := parseJudgeScores(judgeResponse)
+		if finalScores[3] > 0 {
+			lastScores = finalScores
+		}
+		_ = uc.ideaRepo.Update(ctx, &Idea{
+			ID:          ideaID,
+			FinalReport: judgeResponse,
+		})
+		sendEvent(DebateEvent{Type: "judge", Agent: llm.AgentJudge.Emoji, Content: judgeResponse})
 	}
 
-	// 从裁决报告中解析最终评分
-	finalScores := parseJudgeScores(judgeResponse)
-	if finalScores[3] > 0 {
-		lastScores = finalScores
-	}
-
-	_ = uc.ideaRepo.Update(ctx, &Idea{
-		ID:          ideaID,
-		FinalReport: judgeResponse,
-	})
 	_ = uc.ideaRepo.UpdateScores(ctx, ideaID, lastScores[0], lastScores[1], lastScores[2], lastScores[3])
-
-	sendEvent(DebateEvent{Type: "judge", Agent: llm.AgentJudge.Emoji, Content: judgeResponse})
 
 	// ========== Step 6: 生成摘要 ==========
 	sendEvent(DebateEvent{Type: "summary", Agent: llm.AgentDebateSummarizer.Emoji, Content: "生成辩论摘要..."})
