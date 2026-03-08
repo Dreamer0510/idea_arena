@@ -118,8 +118,28 @@ func (p *AcademicFrontierPlugin) searchBing(ctx context.Context, query string, l
 		DetectAntiBot:  true,
 	})
 	if err != nil {
-		p.log.Warnf("[AcademicFrontier] search error for query '%s': %v", query, err)
+		p.log.Warnf("[AcademicFrontier] Bing HTML error for '%s': %v, fallback to RSS", query, err)
+		return p.searchBingRSS(ctx, query, limit)
+	}
+	topics := parseBingToTopics(body, query, limit)
+	if len(topics) > 0 {
+		return topics
+	}
+	p.log.Warnf("[AcademicFrontier] Bing HTML got 0 for '%s', fallback to RSS", query)
+	return p.searchBingRSS(ctx, query, limit)
+}
+
+func (p *AcademicFrontierPlugin) searchBingRSS(ctx context.Context, query string, limit int) []*biz.RawTopic {
+	rssURL := fmt.Sprintf("https://www.bing.com/search?q=%s&format=rss&count=%d", url.QueryEscape(query), limit)
+	body, err := fetchHTMLWithRetry(ctx, p.client, rssURL, crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
+		Referer:        "https://www.bing.com/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[AcademicFrontier] Bing RSS error for '%s': %v", query, err)
 		return nil
 	}
-	return parseBingToTopics(body, query, limit)
+	return parseBingRSSItemsToTopics(body, query, limit)
 }

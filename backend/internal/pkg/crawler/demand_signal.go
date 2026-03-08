@@ -118,8 +118,28 @@ func (p *DemandSignalPlugin) searchBing(ctx context.Context, query string, limit
 		DetectAntiBot:  true,
 	})
 	if err != nil {
-		p.log.Warnf("[DemandSignal] search error for query '%s': %v", query, err)
+		p.log.Warnf("[DemandSignal] Bing HTML error for '%s': %v, fallback to RSS", query, err)
+		return p.searchBingRSS(ctx, query, limit)
+	}
+	topics := parseBingToTopics(body, query, limit)
+	if len(topics) > 0 {
+		return topics
+	}
+	p.log.Warnf("[DemandSignal] Bing HTML got 0 for '%s', fallback to RSS", query)
+	return p.searchBingRSS(ctx, query, limit)
+}
+
+func (p *DemandSignalPlugin) searchBingRSS(ctx context.Context, query string, limit int) []*biz.RawTopic {
+	rssURL := fmt.Sprintf("https://www.bing.com/search?q=%s&format=rss&count=%d", url.QueryEscape(query), limit)
+	body, err := fetchHTMLWithRetry(ctx, p.client, rssURL, crawlerFetchOptions{
+		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
+		Referer:        "https://www.bing.com/",
+		MaxRetries:     1,
+		DetectAntiBot:  false,
+	})
+	if err != nil {
+		p.log.Warnf("[DemandSignal] Bing RSS error for '%s': %v", query, err)
 		return nil
 	}
-	return parseBingToTopics(body, query, limit)
+	return parseBingRSSItemsToTopics(body, query, limit)
 }

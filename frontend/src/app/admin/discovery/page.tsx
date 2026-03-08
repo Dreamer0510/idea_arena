@@ -138,6 +138,7 @@ function TopicsPanel() {
   const sourceLabels: Record<string, string> = {
     "52pojie": "吾爱破解", bing_keyword: "Bing", baidu_keyword: "百度",
     baidu_hot: "百度热搜", github_trending: "GitHub Trending", hackernews_top: "Hacker News",
+    hn_pain: "HN痛点", baidu_social_pain: "百度热搜痛点", cn_social_pain: "中文社交痛点",
     bing_trend: "Bing热点", bing_trend_en: "Bing(EN)", baidu_trend: "百度热点",
     xiaohongshu_pain: "小红书痛点", zhihu_pain: "知乎痛点", reddit_pain: "Reddit痛点",
     arxiv_frontier: "arXiv前沿", hf_papers_frontier: "HF Papers", paperswithcode_frontier: "PapersWithCode",
