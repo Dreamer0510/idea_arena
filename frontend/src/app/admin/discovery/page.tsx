@@ -142,7 +142,7 @@ function TopicsPanel() {
     bing_trend: "Bing热点", bing_trend_en: "Bing(EN)", baidu_trend: "百度热点",
     xiaohongshu_pain: "小红书痛点", zhihu_pain: "知乎痛点", reddit_pain: "Reddit痛点",
     arxiv_api: "arXiv API", hf_daily_papers: "HF每日论文", paperswithcode: "PapersWithCode",
-    "36kr_funding": "36氪融资", techcrunch_funding: "TechCrunch融资", crunchbase_funding: "Crunchbase融资",
+    "36kr_rss": "36氪", "36kr_newsflash": "36氪快讯", techcrunch_rss: "TechCrunch", crunchbase_news: "Crunchbase News",
     gov_policy: "Gov政策", ndrc_policy: "发改委政策", miit_policy: "工信部政策",
     linkedin_demand: "LinkedIn需求", zhaopin_demand: "招聘需求", g2_review_demand: "G2评论需求",
     llm_creative: "AI创意", collision: "跨域碰撞",

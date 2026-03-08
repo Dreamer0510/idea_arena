@@ -165,24 +165,80 @@ func TestAcademicPWC(t *testing.T) {
 	}
 }
 
-// TestFundingSignalPluginFetch 测试 funding_signal 插件能否获取数据
+// TestFundingSignalPluginFetch 测试 funding_signal 完整 Fetch
 func TestFundingSignalPluginFetch(t *testing.T) {
 	p := NewFundingSignalPlugin(log.DefaultLogger, noConstraints)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	topics, err := p.Fetch(ctx, 5)
+	topics, err := p.Fetch(ctx, 15)
 	if err != nil {
 		t.Fatalf("Fetch error: %v", err)
 	}
 
-	t.Logf("[FundingSignal] got %d topics", len(topics))
+	sourceCounts := make(map[string]int)
+	for _, topic := range topics {
+		sourceCounts[topic.Source]++
+	}
+	t.Logf("[FundingSignal] total: %d topics", len(topics))
+	for src, cnt := range sourceCounts {
+		t.Logf("  source=%s count=%d", src, cnt)
+	}
+	t.Log("--- 详细列表 ---")
 	for i, topic := range topics {
-		t.Logf("  #%d source=%s title=%q url=%s", i+1, topic.Source, topic.Title, topic.URL)
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
 	}
 
 	if len(topics) == 0 {
-		t.Error("[FundingSignal] returned 0 topics — both Bing HTML and RSS failed")
+		t.Error("[FundingSignal] returned 0 topics")
+	}
+}
+
+// TestFunding36kr 单独测试 36氪来源
+func TestFunding36kr(t *testing.T) {
+	p := NewFundingSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetch36kr(ctx, 5)
+	t.Logf("[36kr] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[36kr] returned 0 topics")
+	}
+}
+
+// TestFundingTechCrunch 单独测试 TechCrunch RSS
+func TestFundingTechCrunch(t *testing.T) {
+	p := NewFundingSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchTechCrunchRSS(ctx, 5)
+	t.Logf("[TechCrunch] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[TechCrunch] returned 0 topics")
+	}
+}
+
+// TestFundingCrunchbase 单独测试 Crunchbase News RSS
+func TestFundingCrunchbase(t *testing.T) {
+	p := NewFundingSignalPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchCrunchbaseNewsRSS(ctx, 5)
+	t.Logf("[Crunchbase] got %d topics", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[Crunchbase] returned 0 topics")
 	}
 }
 
