@@ -88,24 +88,80 @@ func TestSocialPainXHSExplore(t *testing.T) {
 	}
 }
 
-// TestAcademicFrontierPluginFetch 测试 academic_frontier 插件能否获取数据
+// TestAcademicFrontierPluginFetch 测试 academic_frontier 完整 Fetch
 func TestAcademicFrontierPluginFetch(t *testing.T) {
 	p := NewAcademicFrontierPlugin(log.DefaultLogger, noConstraints)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	topics, err := p.Fetch(ctx, 5)
+	topics, err := p.Fetch(ctx, 15)
 	if err != nil {
 		t.Fatalf("Fetch error: %v", err)
 	}
 
-	t.Logf("[AcademicFrontier] got %d topics", len(topics))
+	sourceCounts := make(map[string]int)
+	for _, topic := range topics {
+		sourceCounts[topic.Source]++
+	}
+	t.Logf("[AcademicFrontier] total: %d topics", len(topics))
+	for src, cnt := range sourceCounts {
+		t.Logf("  source=%s count=%d", src, cnt)
+	}
+	t.Log("--- 详细列表 ---")
 	for i, topic := range topics {
-		t.Logf("  #%d source=%s title=%q url=%s", i+1, topic.Source, topic.Title, topic.URL)
+		t.Logf("  #%d [%s] pop=%d title=%q url=%s", i+1, topic.Source, topic.Popularity, topic.Title, topic.URL)
 	}
 
 	if len(topics) == 0 {
-		t.Error("[AcademicFrontier] returned 0 topics — both Bing HTML and RSS failed")
+		t.Error("[AcademicFrontier] returned 0 topics")
+	}
+}
+
+// TestAcademicArXiv 单独测试 arXiv API
+func TestAcademicArXiv(t *testing.T) {
+	p := NewAcademicFrontierPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchArXiv(ctx, 5)
+	t.Logf("[arXiv] got %d papers", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d title=%q url=%s snippet=%s", i+1, topic.Title, topic.URL, topic.Snippet[:min(100, len(topic.Snippet))])
+	}
+	if len(topics) == 0 {
+		t.Error("[arXiv] returned 0 papers")
+	}
+}
+
+// TestAcademicHFPapers 单独测试 HuggingFace Daily Papers
+func TestAcademicHFPapers(t *testing.T) {
+	p := NewAcademicFrontierPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchHFDailyPapers(ctx, 5)
+	t.Logf("[HF Papers] got %d papers", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[HF Papers] returned 0 papers")
+	}
+}
+
+// TestAcademicPWC 单独测试 PapersWithCode
+func TestAcademicPWC(t *testing.T) {
+	p := NewAcademicFrontierPlugin(log.DefaultLogger, noConstraints)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	topics := p.fetchPapersWithCode(ctx, 5)
+	t.Logf("[PapersWithCode] got %d papers", len(topics))
+	for i, topic := range topics {
+		t.Logf("  #%d pop=%d title=%q url=%s", i+1, topic.Popularity, topic.Title, topic.URL)
+	}
+	if len(topics) == 0 {
+		t.Error("[PapersWithCode] returned 0 papers")
 	}
 }
 
