@@ -493,6 +493,7 @@ func defaultPromptMap() map[string]string {
 		llm.AgentJudge,
 		llm.AgentMetaExtractor,
 		llm.AgentDebateSummarizer,
+		llm.AgentTopicStrategist,
 	}
 	m := make(map[string]string, len(agents))
 	for _, a := range agents {
@@ -509,6 +510,7 @@ func getDefaultAgents() []*data.AgentConfig {
 		llm.AgentJudge,
 		llm.AgentMetaExtractor,
 		llm.AgentDebateSummarizer,
+		llm.AgentTopicStrategist,
 	}
 	result := make([]*data.AgentConfig, len(agents))
 	for i, a := range agents {

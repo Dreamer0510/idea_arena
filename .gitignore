@@ -46,6 +46,10 @@ Thumbs.db
 # ====== Docker ======
 docker-compose.override.yaml
 
+# ====== 监控脚本（含敏感配置）======
+deployments/monitoring/.env
+deployments/monitoring/logs/
+
 # ====== 部署临时文件 ======
 *.tar.gz
 *.bak

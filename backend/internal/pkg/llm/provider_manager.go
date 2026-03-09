@@ -92,8 +92,15 @@ func (pm *ProviderManager) CallWithProvider(ctx context.Context, providerID int6
 	req := &ChatRequest{
 		Model:       model,
 		Messages:    allMessages,
-		MaxTokens:   maxTokens,
 		Temperature: temperature,
+	}
+
+	// 推理模型（gpt-5.x/o1/o3/deepseek-thinking）使用 max_completion_tokens
+	// 因为 reasoning_tokens 会占用 max_tokens 配额导致 content 为空
+	if isReasoningModel(model) {
+		req.MaxCompletionTokens = maxTokens * 4 // 给推理留足空间
+	} else {
+		req.MaxTokens = maxTokens
 	}
 
 	var lastErr error
@@ -367,7 +374,7 @@ func (pm *ProviderManager) doProviderRequest(ctx context.Context, pc *providerCl
 	}
 
 	if len(chatResp.Choices) == 0 || chatResp.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("empty LLM response")
+		return "", fmt.Errorf("empty LLM response (choices=%d, raw=%s)", len(chatResp.Choices), string(respBody[:min(len(respBody), 500)]))
 	}
 
 	return chatResp.Choices[0].Message.Content, nil
@@ -383,6 +390,24 @@ func normalizeBaseURL(baseURL string) string {
 		return u
 	}
 	return u + "/v1"
+}
+
+// isReasoningModel 检测是否为推理模型（reasoning tokens 会占用 max_tokens 配额）
+func isReasoningModel(model string) bool {
+	m := strings.ToLower(model)
+	// GPT-5.x 系列（非 -chat 变体）
+	if strings.HasPrefix(m, "gpt-5") && !strings.Contains(m, "-chat") {
+		return true
+	}
+	// OpenAI o 系列推理模型
+	if strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") {
+		return true
+	}
+	// DeepSeek thinking 系列
+	if strings.Contains(m, "-thinking") {
+		return true
+	}
+	return false
 }
 
 // ModelInfo 模型信息（来自 /v1/models 接口）

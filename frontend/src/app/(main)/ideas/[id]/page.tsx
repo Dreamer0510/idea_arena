@@ -378,7 +378,7 @@ export default function IdeaDetailPage() {
 
       {/* ═══ Final Report ═══ */}
       {idea.final_report && (
-        <MarkdownSection title="深度可行性报告" icon={<FileText className="h-5 w-5 text-indigo-500" />} content={idea.final_report} />
+        <MarkdownSection title="深度可行性报告" icon={<FileText className="h-5 w-5 text-indigo-500" />} content={idea.final_report} defaultExpanded />
       )}
 
       {/* ═══ Debate Pipeline — Chat Style ═══ */}
@@ -482,8 +482,8 @@ function DevPromptSection({ content }: { content: string }) {
 }
 
 /* ───────── Markdown Section ───────── */
-function MarkdownSection({ title, icon, content }: { title: string; icon: React.ReactNode; content: string }) {
-  const [expanded, setExpanded] = useState(false);
+function MarkdownSection({ title, icon, content, defaultExpanded = false }: { title: string; icon: React.ReactNode; content: string; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const isLong = content.length > 800;
 
   return (

@@ -1093,7 +1093,7 @@ func (uc *DebateUsecase) runVoting(ctx context.Context, topic, proposal, judgeRe
 	voters := []voterConfig{
 		{AgentID: "voter_tech", Name: "技术评审", Model: "deepseek-v3.2"},
 		{AgentID: "voter_biz", Name: "商业评审", Model: "gpt-4o"},
-		{AgentID: "voter_overall", Name: "综合评审", Model: "claude-sonnet-4-6"},
+		{AgentID: "voter_overall", Name: "综合评审", Model: "gpt-4o-mini"},
 	}
 
 	sendEvent(DebateEvent{Type: "vote", Agent: "🗳️", Content: fmt.Sprintf("启动多模型投票评审（%d位评审员）...", len(voters))})

@@ -678,7 +678,12 @@ func (uc *DiscoveryUsecase) RunAutoDiscoveryAndDebate(ctx context.Context) (int,
 	}
 
 	if len(selected) == 0 {
-		uc.log.Info("[AutoDiscovery] AI 未精选任何话题")
+		uc.log.Warnf("[AutoDiscovery] AI 未精选任何话题，降级为按分数选取 top-%d", selectionQuota)
+		selected = uc.fallbackSelect(filteredTopics, selectionQuota)
+	}
+
+	if len(selected) == 0 {
+		uc.log.Info("[AutoDiscovery] 无可用话题")
 		drained := uc.drainPendingIdeas(ctx)
 		return drained, nil
 	}
@@ -1038,21 +1043,30 @@ func (uc *DiscoveryUsecase) aiSelectTopics(ctx context.Context, topics []*Discov
 	return selected, nil
 }
 
-// fallbackSelect 降级精选：直接取前N个热门话题
+// fallbackSelect 降级精选：从热门话题中选取，但必须通过质量门槛
 func (uc *DiscoveryUsecase) fallbackSelect(topics []*DiscoveredTopic, count int) []SelectedTopic {
 	if len(topics) == 0 {
 		return nil
 	}
-	if count > len(topics) {
-		count = len(topics)
-	}
+
+	const (
+		fallbackMinScore    = 6.0 // 降级模式最低分数门槛
+		fallbackMinTitleLen = 8   // 标题最少字符数（过滤感叹句/无意义短句）
+	)
 
 	var selected []SelectedTopic
-	for i := 0; i < count; i++ {
+	for _, t := range topics {
+		if len(selected) >= count {
+			break
+		}
+		titleRunes := []rune(t.Title)
+		if t.RecommendScore < fallbackMinScore || len(titleRunes) < fallbackMinTitleLen {
+			continue
+		}
 		selected = append(selected, SelectedTopic{
-			Topic:             topics[i].Title,
-			Reason:            "降级模式：直接选取",
-			DiscoveredTopicID: topics[i].ID,
+			Topic:             t.Title,
+			Reason:            "降级模式：按分数选取",
+			DiscoveredTopicID: t.ID,
 		})
 	}
 	return selected
@@ -1399,6 +1413,12 @@ func calculateRuleScores(rt *RawTopic) (pain, trend, feasibility, monetization, 
 			monetization*0.20 +
 			novelty*0.10,
 	)
+
+	// 标题过短惩罚：< 8 字符的标题大概率是感叹句/无意义短句，总分减半
+	if len([]rune(rt.Title)) < 8 {
+		total *= 0.5
+	}
+
 	return pain, trend, feasibility, monetization, novelty, total
 }
 

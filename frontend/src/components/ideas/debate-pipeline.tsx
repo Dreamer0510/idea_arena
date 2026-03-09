@@ -66,6 +66,120 @@ function extractSummary(content: string, maxLen = 140): string {
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "…" : cleaned;
 }
 
+/* ── Referee Content Parser ── */
+interface ParsedRefereeData {
+  scoreDelta?: { prev: number; curr: number; delta: number; reason: string };
+  evalScores?: { feasibility: number; economics: number; profit: number; overall: number; reason: string };
+  remainingText: string;
+}
+
+function parseRefereeContent(content: string): ParsedRefereeData {
+  let remaining = content;
+  let scoreDelta: ParsedRefereeData["scoreDelta"];
+  let evalScores: ParsedRefereeData["evalScores"];
+
+  // Parse [SCORE_DELTA]
+  const sdMatch = remaining.match(/\[SCORE_DELTA\]\s*上轮[=＝]([\d.]+)\s*本轮[=＝]([\d.]+)\s*变动[=＝]([+\-\d.]+)\s*原因[=＝]([\s\S]+?)(?=\n|\[EVAL\]|\[TODO|$)/);
+  if (sdMatch) {
+    scoreDelta = {
+      prev: parseFloat(sdMatch[1]),
+      curr: parseFloat(sdMatch[2]),
+      delta: parseFloat(sdMatch[3]),
+      reason: sdMatch[4].trim(),
+    };
+    remaining = remaining.replace(sdMatch[0], "");
+  }
+
+  // Parse [EVAL]
+  const evalMatch = remaining.match(/\[EVAL\]\s*feasibility[=＝]([\d.]+)\s*economics[=＝]([\d.]+)\s*profit[=＝]([\d.]+)\s*overall[=＝]([\d.]+)\s*(?:reason[=＝]([\s\S]+?))?(?=\n|\[TODO|$)/);
+  if (evalMatch) {
+    evalScores = {
+      feasibility: parseFloat(evalMatch[1]),
+      economics: parseFloat(evalMatch[2]),
+      profit: parseFloat(evalMatch[3]),
+      overall: parseFloat(evalMatch[4]),
+      reason: evalMatch[5]?.trim() || "",
+    };
+    remaining = remaining.replace(evalMatch[0], "");
+  }
+
+  // Remove [TODO_UPDATE], [TODO_NEW], [TODO_SNAPSHOT], [TODO_VERDICT] JSON blocks (already shown via TodoDisplay)
+  remaining = remaining.replace(/\[TODO_(?:UPDATE|NEW|SNAPSHOT|VERDICT)\]\s*```(?:json)?\s*[\s\S]*?```/g, "");
+  remaining = remaining.replace(/\[TODO_(?:UPDATE|NEW|SNAPSHOT|VERDICT)\]\s*\{[\s\S]*\}/g, "");
+  remaining = remaining.replace(/\[TODO_(?:UPDATE|NEW|SNAPSHOT|VERDICT)\][^\n]*/g, "");
+  remaining = remaining.trim();
+
+  return { scoreDelta, evalScores, remainingText: remaining };
+}
+
+function extractRefereeSummary(content: string): string {
+  const parsed = parseRefereeContent(content);
+  if (parsed.scoreDelta) {
+    return parsed.scoreDelta.reason;
+  }
+  if (parsed.evalScores?.reason) {
+    return parsed.evalScores.reason;
+  }
+  return extractSummary(content, 100);
+}
+
+function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground w-14 shrink-0">{label}</span>
+      <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${Math.min(value * 10, 100)}%` }} />
+      </div>
+      <span className="text-xs font-bold font-mono w-8 text-right">{value.toFixed(1)}</span>
+    </div>
+  );
+}
+
+function RefereeContentDisplay({ content }: { content: string }) {
+  const parsed = parseRefereeContent(content);
+
+  return (
+    <div className="space-y-4">
+      {/* Score Delta Card */}
+      {parsed.scoreDelta && (
+        <div className="rounded-xl border bg-amber-500/5 border-amber-500/20 p-4">
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">评分变动</span>
+            <span className={`text-sm font-black font-mono ${
+              parsed.scoreDelta.delta > 0 ? "text-green-500" : parsed.scoreDelta.delta < 0 ? "text-red-500" : "text-muted-foreground"
+            }`}>
+              {parsed.scoreDelta.prev.toFixed(1)} → {parsed.scoreDelta.curr.toFixed(1)}
+              ({parsed.scoreDelta.delta > 0 ? "+" : ""}{parsed.scoreDelta.delta.toFixed(1)})
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground leading-relaxed">{parsed.scoreDelta.reason}</p>
+        </div>
+      )}
+
+      {/* Eval Scores Card */}
+      {parsed.evalScores && (
+        <div className="rounded-xl border bg-muted/30 p-4 space-y-2.5">
+          <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">分项评分</span>
+          <ScoreBar label="可行性" value={parsed.evalScores.feasibility} color="bg-green-500" />
+          <ScoreBar label="经济性" value={parsed.evalScores.economics} color="bg-cyan-500" />
+          <ScoreBar label="利润潜力" value={parsed.evalScores.profit} color="bg-violet-500" />
+          <ScoreBar label="综合" value={parsed.evalScores.overall} color="bg-amber-500" />
+          {parsed.evalScores.reason && (
+            <p className="text-sm text-muted-foreground leading-relaxed pt-1 border-t">{parsed.evalScores.reason}</p>
+          )}
+        </div>
+      )}
+
+      {/* Remaining markdown content */}
+      {parsed.remainingText && (
+        <div className={proseClasses}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.remainingText}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Score Divider ── */
 function ScoreDivider({ delta, score }: { delta: number; score: number }) {
   return (
@@ -106,28 +220,41 @@ function ChatBubble({ msg, expanded, onToggle }: {
     );
   }
 
-  // Center layout for judge
+  // Center layout for referee
   if (isCenter) {
+    const refSummary = msg.agent === "referee" ? extractRefereeSummary(msg.content) : summary;
     return (
       <div className="flex flex-col items-center my-2">
-        <button onClick={onToggle} className="w-full max-w-[90%] text-left">
-          <div className="rounded-2xl border bg-card p-4 transition-all duration-300 hover:bg-muted/30"
-            style={{ boxShadow: expanded ? "0 0 20px -6px rgba(245,158,11,0.2)" : "none" }}>
+        <button onClick={onToggle} className="w-full max-w-[90%] text-left group">
+          <div className={`rounded-2xl border-2 p-4 transition-all duration-300 ${
+            expanded
+              ? "border-amber-500/40 bg-amber-500/5 shadow-lg shadow-amber-500/10"
+              : "border-amber-500/15 bg-card hover:border-amber-500/30 hover:bg-amber-500/5"
+          }`}>
             <div className="flex items-center gap-2.5 mb-2">
               <span className="text-base">{c.icon}</span>
               <span className={`font-bold text-sm ${c.color}`}>{c.name}</span>
               <span className="text-muted-foreground text-[10px] font-mono">R{msg.round}</span>
-              <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground ml-auto transition-transform ${expanded ? "rotate-180" : ""}`} />
+              <div className="ml-auto flex items-center gap-1.5">
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full transition-colors ${
+                  expanded ? "bg-amber-500/20 text-amber-500" : "bg-muted text-muted-foreground group-hover:bg-amber-500/10 group-hover:text-amber-500"
+                }`}>
+                  {expanded ? "收起" : "展开详情"}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} />
+              </div>
             </div>
-            {!expanded && <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">{summary}</p>}
+            {!expanded && <p className="text-[13px] text-muted-foreground line-clamp-2 leading-relaxed">{refSummary}</p>}
           </div>
         </button>
         <AnimatePresence>
           {expanded && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3 }} className="overflow-hidden w-full max-w-[90%]">
-              <div className="mt-1 rounded-2xl border bg-card p-5 overflow-y-auto max-h-[60vh]">
-                <div className={proseClasses}><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
+              <div className="mt-1 rounded-2xl border border-amber-500/20 bg-card p-5 overflow-y-auto max-h-[60vh]">
+                {msg.agent === "referee" ? <RefereeContentDisplay content={msg.content} /> : (
+                  <div className={proseClasses}><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
+                )}
               </div>
             </motion.div>
           )}
@@ -154,17 +281,24 @@ function ChatBubble({ msg, expanded, onToggle }: {
           {msg.phase && <span className="text-muted-foreground text-[10px] font-mono hidden sm:inline">{msg.phase}</span>}
         </div>
 
-        <button onClick={onToggle} className="w-full text-left">
-          <div className={`rounded-2xl border bg-card p-4 transition-all duration-300 hover:bg-muted/30 ${isLeft ? "rounded-tl-md" : "rounded-tr-md"
-            }`} style={{ boxShadow: expanded ? `0 0 20px -6px rgba(129,140,248,0.2)` : "none" }}>
+        <button onClick={onToggle} className="w-full text-left group">
+          <div className={`rounded-2xl border-2 p-4 transition-all duration-300 ${isLeft ? "rounded-tl-md" : "rounded-tr-md"} ${
+            expanded
+              ? `border-indigo-500/30 bg-indigo-500/5 shadow-lg shadow-indigo-500/10`
+              : `border-border hover:border-indigo-500/20 hover:bg-muted/30 bg-card`
+          }`}>
             {!expanded ? (
               <div className="flex items-start gap-2">
                 <p className="text-[13px] text-muted-foreground line-clamp-3 leading-relaxed flex-1">{summary}</p>
-                <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                <span className="shrink-0 flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-muted text-muted-foreground group-hover:bg-indigo-500/10 group-hover:text-indigo-400 transition-colors">
+                  展开 <ChevronDown className="w-3 h-3" />
+                </span>
               </div>
             ) : (
-              <div className="flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
-                <ChevronDown className="w-3 h-3 rotate-180" /> 点击收起
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">
+                  收起 <ChevronDown className="w-3 h-3 inline rotate-180" />
+                </span>
               </div>
             )}
           </div>

@@ -1,13 +1,39 @@
-version: "3.8"
-
 services:
+  mysql:
+    image: mysql:8.4
+    restart: always
+    ports:
+      - "0.0.0.0:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: Svkii48XADO4atL73vkY
+      MYSQL_DATABASE: idea_arena
+      MYSQL_USER: idea_arena
+      MYSQL_PASSWORD: Svkii48XADO4atL73vkY
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   backend:
+    image: idea-arena-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
     ports:
       - "127.0.0.1:8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
     volumes:
       - ./data/sqlite:/app/data
       - ./data/logs/backend:/app/logs
@@ -15,10 +41,11 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
+    image: idea-arena-frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -36,3 +63,4 @@ services:
       options:
         max-size: "20m"
         max-file: "3"
+

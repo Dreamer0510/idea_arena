@@ -22,10 +22,11 @@ type Message struct {
 
 // ChatRequest OpenAI 兼容请求
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens"`
-	Temperature float64   `json:"temperature"`
+	Model               string    `json:"model"`
+	Messages             []Message `json:"messages"`
+	MaxTokens            int       `json:"max_tokens,omitempty"`
+	MaxCompletionTokens  int       `json:"max_completion_tokens,omitempty"`
+	Temperature          float64   `json:"temperature"`
 }
 
 // ChatResponse OpenAI 兼容响应
@@ -94,8 +95,14 @@ func (c *Client) Call(ctx context.Context, systemPrompt string, messages []Messa
 	req := &ChatRequest{
 		Model:       model,
 		Messages:    allMessages,
-		MaxTokens:   maxTokens,
 		Temperature: temperature,
+	}
+
+	// 推理模型使用 max_completion_tokens（reasoning_tokens 会占用 max_tokens）
+	if isReasoningModel(model) {
+		req.MaxCompletionTokens = maxTokens * 4
+	} else {
+		req.MaxTokens = maxTokens
 	}
 
 	var lastErr error
